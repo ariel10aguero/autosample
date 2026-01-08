@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Sample, SampleFormat, Stream, StreamConfig};
 use crossbeam_channel::{bounded, Receiver, Sender};
@@ -23,8 +23,7 @@ pub fn list_audio_inputs() -> Result<()> {
     }
 
     for (i, device) in devices {
-        let name = device.name().unwrap_or_else(|_| 
-"Unknown".to_string());
+        let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
         println!("\n{:3}: {}", i, name);
 
         if let Ok(config) = device.default_input_config() {
@@ -86,33 +85,28 @@ pub struct AudioCapture {
 }
 
 impl AudioCapture {
-    pub fn new(device: Device, target_sr: u32, target_channels: u16) -> 
-Result<Self> {
-        let device_name = device.name().unwrap_or_else(|_| 
-"Unknown".to_string());
+    pub fn new(device: Device, target_sr: u32, target_channels: u16) -> Result<Self> {
+        let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
         info!("Setting up audio capture from: {}", device_name);
 
         // Try to find a config that matches our requirements
-        let config = Self::find_suitable_config(&device, target_sr, 
-target_channels)?;
+        let config = Self::find_suitable_config(&device, target_sr, target_channels)?;
 
         info!(
             "Using audio config: {} Hz, {} channels, {:?}",
-            config.sample_rate.0, config.channels, config.sample_format
+            config.sample_rate().0,
+            config.channels(),
+            config.sample_format()
         );
 
         let (sender, receiver) = bounded(1000);
         let running = Arc::new(AtomicBool::new(true));
 
-        let stream = match config.sample_format {
-            SampleFormat::F32 => Self::build_stream::<f32>(&device, 
-&config.config, sender)?,
-            SampleFormat::I16 => Self::build_stream::<i16>(&device, 
-&config.config, sender)?,
-            SampleFormat::U16 => Self::build_stream::<u16>(&device, 
-&config.config, sender)?,
-            _ => anyhow::bail!("Unsupported sample format: {:?}", 
-config.sample_format),
+        let stream = match config.sample_format() {
+            SampleFormat::F32 => Self::build_stream::<f32>(&device, &config.config(), sender)?,
+            SampleFormat::I16 => Self::build_stream::<i16>(&device, &config.config(), sender)?,
+            SampleFormat::U16 => Self::build_stream::<u16>(&device, &config.config(), sender)?,
+            _ => anyhow::bail!("Unsupported sample format: {:?}", config.sample_format()),
         };
 
         stream.play()?;
@@ -121,8 +115,8 @@ config.sample_format),
             stream,
             receiver,
             running,
-            channels: config.channels,
-            sample_rate: config.sample_rate.0,
+            channels: config.channels(),
+            sample_rate: config.sample_rate().0,
         })
     }
 
@@ -136,8 +130,7 @@ config.sample_format),
             for config in configs {
                 if config.channels() == target_channels {
                     let sr = cpal::SampleRate(target_sr);
-                    if config.min_sample_rate() <= sr && sr <= 
-config.max_sample_rate() {
+                    if config.min_sample_rate() <= sr && sr <= config.max_sample_rate() {
                         return Ok(config.with_sample_rate(sr));
                     }
                 }
@@ -147,8 +140,7 @@ config.max_sample_rate() {
         // Fall back to default
         let default_config = device.default_input_config()?;
         warn!(
-            "Could not find exact match, using default: {} Hz, {} 
-channels",
+            "Could not find exact match, using default: {} Hz, {} channels",
             default_config.sample_rate().0,
             default_config.channels()
         );
@@ -164,13 +156,10 @@ channels",
         T: Sample + cpal::SizedSample,
         f32: cpal::FromSample<T>,
     {
-        let channels = config.channels as usize;
-
         let stream = device.build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data.iter().map(|&s| 
-s.to_sample()).collect();
+                let samples: Vec<f32> = data.iter().map(|&s| s.to_sample()).collect();
                 let _ = sender.try_send(samples);
             },
             move |err| {

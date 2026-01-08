@@ -25,21 +25,19 @@ pub fn export_wav(
     };
 
     let mut writer = WavWriter::create(path, spec)
-        .with_context(|| format!("Failed to create WAV file: {}", 
-path.display()))?;
+        .with_context(|| format!("Failed to create WAV file: {}", path.display()))?;
 
     match bit_depth {
         16 => {
             for &sample in samples {
-                let s = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as 
-i16;
+                let s = (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
                 writer.write_sample(s)?;
             }
         }
         24 => {
             for &sample in samples {
-                let s = (sample.clamp(-1.0, 1.0) * 8388607.0) as i32; // 
-2^23 - 1
+                // 2^23 - 1 = 8388607
+                let s = (sample.clamp(-1.0, 1.0) * 8388607.0) as i32;
                 writer.write_sample(s)?;
             }
         }
@@ -55,15 +53,13 @@ i16;
     Ok(())
 }
 
-pub fn export_mp3(wav_path: &Path, mp3_path: &Path, bitrate: u32) -> 
-Result<()> {
+pub fn export_mp3(wav_path: &Path, mp3_path: &Path, bitrate: u32) -> Result<()> {
     // Check if ffmpeg is available
     let ffmpeg_check = Command::new("ffmpeg").arg("-version").output();
 
     if ffmpeg_check.is_err() {
         anyhow::bail!(
-            "ffmpeg not found. Please install ffmpeg or use WAV format 
-only.\n\
+            "ffmpeg not found. Please install ffmpeg or use WAV format only.\n\
              On macOS: brew install ffmpeg\n\
              On Ubuntu: sudo apt install ffmpeg\n\
              On Windows: Download from https://ffmpeg.org/"
@@ -114,10 +110,8 @@ pub fn process_and_export(
     // Trimming
     if let Some(threshold) = trim_threshold_db {
         let min_tail_samples =
-            (sample_rate as u64 * min_tail_ms / 1000) as usize * 
-channels_usize;
-        let (start, end) = dsp::trim_silence(&samples, channels_usize, 
-threshold, min_tail_samples);
+            (sample_rate as u64 * min_tail_ms / 1000) as usize * channels_usize;
+        let (start, end) = dsp::trim_silence(&samples, channels_usize, threshold, min_tail_samples);
         samples = samples[start..end].to_vec();
         info!("Trimmed to {} samples", samples.len());
     }
@@ -143,14 +137,12 @@ threshold, min_tail_samples);
     // Export based on format
     match format {
         "wav" => {
-            export_wav(&samples, channels, sample_rate, bit_depth, 
-output_path)?;
+            export_wav(&samples, channels, sample_rate, bit_depth, output_path)?;
         }
         "mp3" => {
             // Export to temp WAV first
             let temp_wav = output_path.with_extension("tmp.wav");
-            export_wav(&samples, channels, sample_rate, bit_depth, 
-&temp_wav)?;
+            export_wav(&samples, channels, sample_rate, bit_depth, &temp_wav)?;
             
             // Convert to MP3
             let mp3_path = output_path.with_extension("mp3");
@@ -167,8 +159,7 @@ output_path)?;
         "both" => {
             // Export WAV
             let wav_path = output_path.with_extension("wav");
-            export_wav(&samples, channels, sample_rate, bit_depth, 
-&wav_path)?;
+            export_wav(&samples, channels, sample_rate, bit_depth, &wav_path)?;
             
             // Export MP3
             let mp3_path = output_path.with_extension("mp3");

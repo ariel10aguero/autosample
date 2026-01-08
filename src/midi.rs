@@ -1,8 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use midir::{MidiOutput, MidiOutputConnection, MidiOutputPort};
 use std::thread;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::info;
 
 pub fn list_midi_outputs() -> Result<()> {
     let midi_out = MidiOutput::new("autosample-lister")?;
@@ -66,7 +66,7 @@ impl MidiController {
         
         let connection = midi_out
             .connect(&port, "autosample")
-            .context("Failed to connect to MIDI output")?;
+            .map_err(|e| anyhow::anyhow!("Failed to connect to MIDI output: {:?}", e))?;
 
         Ok(Self { connection })
     }
@@ -75,7 +75,7 @@ impl MidiController {
         let msg = [0x90, note, velocity];
         self.connection
             .send(&msg)
-            .context("Failed to send NoteOn")?;
+            .map_err(|e| anyhow::anyhow!("Failed to send NoteOn: {:?}", e))?;
         Ok(())
     }
 
@@ -83,7 +83,7 @@ impl MidiController {
         let msg = [0x80, note, 0];
         self.connection
             .send(&msg)
-            .context("Failed to send NoteOff")?;
+            .map_err(|e| anyhow::anyhow!("Failed to send NoteOff: {:?}", e))?;
         Ok(())
     }
 

@@ -4,8 +4,7 @@ use crate::export::process_and_export;
 use crate::midi::{find_midi_output, MidiController};
 use crate::ringbuf::CaptureBuffer;
 use crate::types::{
-    format_filename, parse_notes, parse_velocities, SampleJob, 
-SampleMetadata, SessionMetadata,
+    format_filename, parse_notes, parse_velocities, SampleJob, SampleMetadata, SessionMetadata,
 };
 use anyhow::{Context, Result};
 use std::fs;
@@ -25,8 +24,7 @@ pub fn run_autosampler(config: RunConfig) -> Result<()> {
     let velocities = parse_velocities(&config.vel)?;
 
     info!(
-        "Will sample {} notes × {} velocities × {} round-robins = {} total 
-samples",
+        "Will sample {} notes × {} velocities × {} round-robins = {} total samples",
         notes.len(),
         velocities.len(),
         config.rr,
@@ -39,15 +37,13 @@ samples",
 
     // Setup audio
     let audio_device = find_audio_input(&config.audio_in)?;
-    let audio_capture = AudioCapture::new(audio_device, config.sr, 
-config.channels)?;
+    let audio_capture = AudioCapture::new(audio_device, config.sr, config.channels)?;
 
     // Setup output directory
     let output_dir = PathBuf::from(&config.output);
     let samples_dir = output_dir.join(&config.prefix).join("samples");
     fs::create_dir_all(&samples_dir)
-        .with_context(|| format!("Failed to create output directory: {}", 
-samples_dir.display()))?;
+        .with_context(|| format!("Failed to create output directory: {}", samples_dir.display()))?;
 
     // Setup CTRL-C handler
     let running = Arc::new(AtomicBool::new(true));
@@ -90,13 +86,11 @@ samples_dir.display()))?;
             job.rr_index,
             "wav",
         );
-        let note_dir = samples_dir.join(format!("{:03}_{}", job.note.0, 
-job.note.to_name()));
+        let note_dir = samples_dir.join(format!("{:03}_{}", job.note.0, job.note.to_name()));
         let output_path = note_dir.join(&filename);
 
         // Skip if resume and file exists
-        if config.resume && (output_path.exists() || 
-output_path.with_extension("mp3").exists()) {
+        if config.resume && (output_path.exists() || output_path.with_extension("mp3").exists()) {
             info!(
                 "[{}/{}] Skipping existing: {} vel{} rr{}",
                 completed + 1,
@@ -150,8 +144,7 @@ output_path.with_extension("mp3").exists()) {
         samples: sample_metadata,
     };
 
-    let session_path = 
-output_dir.join(&config.prefix).join("session.json");
+    let session_path = output_dir.join(&config.prefix).join("session.json");
     let session_json = serde_json::to_string_pretty(&session)?;
     fs::write(&session_path, session_json)?;
 
@@ -168,8 +161,7 @@ fn capture_sample(
     config: &RunConfig,
     output_path: &Path,
 ) -> Result<SampleMetadata> {
-    let total_duration_ms = config.preroll_ms + config.hold_ms + 
-config.tail_ms;
+    let total_duration_ms = config.preroll_ms + config.hold_ms + config.tail_ms;
     let mut buffer = CaptureBuffer::new(
         config.channels as usize,
         config.sr,
@@ -184,19 +176,16 @@ config.tail_ms;
     // Clear any buffered audio
     while receiver.try_recv().is_ok() {}
 
-    let start_time = Instant::now();
     let preroll_duration = Duration::from_millis(config.preroll_ms);
     let hold_duration = Duration::from_millis(config.hold_ms);
     let tail_duration = Duration::from_millis(config.tail_ms);
-    let total_duration = preroll_duration + hold_duration + tail_duration;
 
     // Start capturing
     let capture_start = Instant::now();
 
     // Collect preroll
     while capture_start.elapsed() < preroll_duration {
-        if let Ok(data) = 
-receiver.recv_timeout(Duration::from_millis(100)) {
+        if let Ok(data) = receiver.recv_timeout(Duration::from_millis(100)) {
             buffer.append(&data);
         }
     }
@@ -207,8 +196,7 @@ receiver.recv_timeout(Duration::from_millis(100)) {
 
     // Capture during hold
     while note_on_time.elapsed() < hold_duration {
-        if let Ok(data) = 
-receiver.recv_timeout(Duration::from_millis(100)) {
+        if let Ok(data) = receiver.recv_timeout(Duration::from_millis(100)) {
             buffer.append(&data);
         }
     }
@@ -219,8 +207,7 @@ receiver.recv_timeout(Duration::from_millis(100)) {
 
     // Capture tail
     while note_off_time.elapsed() < tail_duration {
-        if let Ok(data) = 
-receiver.recv_timeout(Duration::from_millis(100)) {
+        if let Ok(data) = receiver.recv_timeout(Duration::from_millis(100)) {
             buffer.append(&data);
         }
     }

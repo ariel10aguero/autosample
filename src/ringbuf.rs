@@ -1,12 +1,10 @@
 use crossbeam_channel::{bounded, Receiver, Sender};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
 /// Simple ring buffer for audio capture using channels
 pub struct RingBuffer {
     sender: Sender<Vec<f32>>,
     receiver: Receiver<Vec<f32>>,
-    capacity_blocks: usize,
+    _capacity_blocks: usize,
 }
 
 impl RingBuffer {
@@ -15,7 +13,7 @@ impl RingBuffer {
         Self {
             sender,
             receiver,
-            capacity_blocks,
+            _capacity_blocks: capacity_blocks,
         }
     }
 
@@ -35,10 +33,8 @@ pub struct CaptureBuffer {
 }
 
 impl CaptureBuffer {
-    pub fn new(channels: usize, sample_rate: u32, duration_ms: u64) -> 
-Self {
-        let samples = (sample_rate as u64 * duration_ms / 1000) as usize * 
-channels;
+    pub fn new(channels: usize, sample_rate: u32, duration_ms: u64) -> Self {
+        let samples = (sample_rate as u64 * duration_ms / 1000) as usize * channels;
         Self {
             buffer: Vec::with_capacity(samples),
             channels,
