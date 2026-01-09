@@ -26,7 +26,6 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      # Optional but recommended: speeds up builds
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -36,7 +35,6 @@ jobs:
       - name: Build workspace (release)
         run: cargo build --release --workspace
 
-      # Collect binaries into a clean folder for upload
       - name: Prepare artifacts (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -50,12 +48,10 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\autosample.exe dist\autosample.exe
-          Copy-Item target\release\autosample-gui.exe 
-dist\autosample-gui.exe
+          Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: autosample-${{ runner.os }}
           path: dist/*
-
