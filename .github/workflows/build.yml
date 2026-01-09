@@ -1,0 +1,61 @@
+name: Build (macOS + Windows)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      # Optional but recommended: speeds up builds
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Build workspace (release)
+        run: cargo build --release --workspace
+
+      # Collect binaries into a clean folder for upload
+      - name: Prepare artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+          cp target/release/autosample dist/autosample
+          cp target/release/autosample-gui dist/autosample-gui
+
+      - name: Prepare artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\autosample.exe dist\autosample.exe
+          Copy-Item target\release\autosample-gui.exe 
+dist\autosample-gui.exe
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosample-${{ runner.os }}
+          path: dist/*
+
