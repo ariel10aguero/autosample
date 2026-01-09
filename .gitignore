@@ -1,0 +1,8 @@
+# Rust build output
+/target/
+
+# Cargo lockfile (ignore for libraries; keep for binaries if you want)
+Cargo.lock
+
+# OS junk
+.DS_Store
