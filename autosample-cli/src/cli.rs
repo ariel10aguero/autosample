@@ -1,5 +1,5 @@
 use autosample_core::RunConfig;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "autosample")]
@@ -13,125 +13,101 @@ pub struct Cli {
 pub enum Commands {
     /// List available MIDI output ports
     ListMidi,
-    
+
     /// List available audio input devices
     ListAudio,
-    
+
     /// Run autosampling session
-    Run(RunConfig),
+    Run(RunConfigArgs),
 }
 
-impl clap::Args for RunConfig {
-    fn augment_args(cmd: clap::Command) -> clap::Command {
-        cmd
-            .arg(clap::Arg::new("midi_out")
-                .long("midi-out")
-                .value_name("DEVICE")
-                .help("MIDI output device name or index")
-                .required(true))
-            .arg(clap::Arg::new("audio_in")
-                .long("audio-in")
-                .value_name("DEVICE")
-                .help("Audio input device name or index")
-                .required(true))
-            .arg(clap::Arg::new("notes")
-                .long("notes")
-                .value_name("RANGE")
-                .help("Note range (e.g., C2..C6, C4,E4,G4)")
-                .required(true))
-            .arg(clap::Arg::new("vel")
-                .long("vel")
-                .value_name("RANGE")
-                .help("Velocity layers (e.g., 127..1:8, 127,100,64)")
-                .required(true))
-            .arg(clap::Arg::new("hold_ms")
-                .long("hold-ms")
-                .value_name("MS")
-                .help("Hold duration in milliseconds")
-                .default_value("1000"))
-            .arg(clap::Arg::new("tail_ms")
-                .long("tail-ms")
-                .value_name("MS")
-                .help("Tail duration in milliseconds")
-                .default_value("2000"))
-            .arg(clap::Arg::new("preroll_ms")
-                .long("preroll-ms")
-                .value_name("MS")
-                .help("Preroll duration in milliseconds")
-                .default_value("100"))
-            .arg(clap::Arg::new("sr")
-                .long("sr")
-                .value_name("HZ")
-                .help("Sample rate")
-                .default_value("48000"))
-            .arg(clap::Arg::new("channels")
-                .long("channels")
-                .value_name("N")
-                .help("Number of channels (1 or 2)")
-                .default_value("2"))
-            .arg(clap::Arg::new("format")
-                .long("format")
-                .value_name("FORMAT")
-                .help("Output format (wav, mp3, both)")
-                .default_value("wav"))
-            .arg(clap::Arg::new("output")
-                .long("output")
-                .value_name("DIR")
-                .help("Output directory")
-                .required(true))
-            .arg(clap::Arg::new("prefix")
-                .long("prefix")
-                .value_name("NAME")
-                .help("File prefix/instrument name")
-                .required(true))
-            .arg(clap::Arg::new("trim_threshold_db")
-                .long("trim-threshold-db")
-                .value_name("DB")
-                .help("Silence trim threshold in dB"))
-            .arg(clap::Arg::new("normalize")
-                .long("normalize")
-                .value_name("MODE")
-                .help("Normalization mode (peak, -1dB)"))
-            .arg(clap::Arg::new("round_robin")
-                .long("round-robin")
-                .value_name("N")
-                .help("Round robin count")
-                .default_value("1"))
-            .arg(clap::Arg::new("resume")
-                .long("resume")
-                .help("Skip existing files")
-                .action(clap::ArgAction::SetTrue))
-    }
+/// Local CLI-facing args type (allowed to derive clap traits)
+#[derive(Debug, Clone, Args)]
+pub struct RunConfigArgs {
+    /// MIDI output device name or index
+    #[arg(long = "midi-out", value_name = "DEVICE", required = true)]
+    pub midi_out: String,
 
-    fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
-        Self::augment_args(cmd)
-    }
+    /// Audio input device name or index
+    #[arg(long = "audio-in", value_name = "DEVICE", required = true)]
+    pub audio_in: String,
+
+    /// Note range (e.g., C2..C6, C4,E4,G4)
+    #[arg(long, value_name = "RANGE", required = true)]
+    pub notes: String,
+
+    /// Velocity layers (e.g., 127..1:8, 127,100,64)
+    #[arg(long, value_name = "RANGE", required = true)]
+    pub vel: String,
+
+    /// Hold duration in milliseconds
+    #[arg(long = "hold-ms", value_name = "MS", default_value_t = 1000)]
+    pub hold_ms: u32,
+
+    /// Tail duration in milliseconds
+    #[arg(long = "tail-ms", value_name = "MS", default_value_t = 2000)]
+    pub tail_ms: u32,
+
+    /// Preroll duration in milliseconds
+    #[arg(long = "preroll-ms", value_name = "MS", default_value_t = 100)]
+    pub preroll_ms: u32,
+
+    /// Sample rate
+    #[arg(long = "sr", value_name = "HZ", default_value_t = 48000)]
+    pub sr: u32,
+
+    /// Number of channels (1 or 2)
+    #[arg(long, value_name = "N", default_value_t = 2)]
+    pub channels: u16,
+
+    /// Output format (wav, mp3, both)
+    #[arg(long, value_name = "FORMAT", default_value = "wav")]
+    pub format: String,
+
+    /// Output directory
+    #[arg(long, value_name = "DIR", required = true)]
+    pub output: String,
+
+    /// File prefix/instrument name
+    #[arg(long, value_name = "NAME", required = true)]
+    pub prefix: String,
+
+    /// Silence trim threshold in dB
+    #[arg(long = "trim-threshold-db", value_name = "DB")]
+    pub trim_threshold_db: Option<f32>,
+
+    /// Normalization mode (peak, -1dB)
+    #[arg(long, value_name = "MODE")]
+    pub normalize: Option<String>,
+
+    /// Round robin count
+    #[arg(long = "round-robin", value_name = "N", default_value_t = 1)]
+    pub round_robin: u32,
+
+    /// Skip existing files
+    #[arg(long, action = clap::ArgAction::SetTrue)]
+    pub resume: bool,
 }
 
-impl clap::FromArgMatches for RunConfig {
-    fn from_arg_matches(matches: &clap::ArgMatches) -> Result<Self, clap::Error> {
-        Ok(RunConfig {
-            midi_out: matches.get_one::<String>("midi_out").unwrap().clone(),
-            audio_in: matches.get_one::<String>("audio_in").unwrap().clone(),
-            notes: matches.get_one::<String>("notes").unwrap().clone(),
-            vel: matches.get_one::<String>("vel").unwrap().clone(),
-            hold_ms: matches.get_one::<String>("hold_ms").unwrap().parse().unwrap(),
-            tail_ms: matches.get_one::<String>("tail_ms").unwrap().parse().unwrap(),
-            preroll_ms: matches.get_one::<String>("preroll_ms").unwrap().parse().unwrap(),
-            sr: matches.get_one::<String>("sr").unwrap().parse().unwrap(),
-            channels: matches.get_one::<String>("channels").unwrap().parse().unwrap(),
-            format: matches.get_one::<String>("format").unwrap().clone(),
-            output: matches.get_one::<String>("output").unwrap().clone(),
-            prefix: matches.get_one::<String>("prefix").unwrap().clone(),
-            trim_threshold_db: matches.get_one::<String>("trim_threshold_db").map(|s| s.parse().unwrap()),
-            normalize: matches.get_one::<String>("normalize").cloned(),
-            round_robin: matches.get_one::<String>("round_robin").unwrap().parse().unwrap(),
-            resume: matches.get_flag("resume"),
-        })
-    }
-
-    fn update_from_arg_matches(&mut self, matches: &clap::ArgMatches) -> Result<(), clap::Error> {
-        *self = Self::from_arg_matches(matches)?;
-        Ok(())
+impl From<RunConfigArgs> for RunConfig {
+    fn from(a: RunConfigArgs) -> Self {
+        RunConfig {
+            midi_out: a.midi_out,
+            audio_in: a.audio_in,
+            notes: a.notes,
+            vel: a.vel,
+            hold_ms: a.hold_ms,
+            tail_ms: a.tail_ms,
+            preroll_ms: a.preroll_ms,
+            sr: a.sr,
+            channels: a.channels,
+            format: a.format,
+            output: a.output,
+            prefix: a.prefix,
+            trim_threshold_db: a.trim_threshold_db,
+            normalize: a.normalize,
+            round_robin: a.round_robin,
+            resume: a.resume,
+        }
     }
 }

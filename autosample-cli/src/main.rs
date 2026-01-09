@@ -1,12 +1,12 @@
 mod cli;
 
 use anyhow::Result;
-use autosample_core::{audio, midi, AutosampleEngine, LogLevel, ProgressUpdate};
+use autosample_core::{audio, midi, AutosampleEngine, LogLevel, ProgressUpdate, RunConfig};
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, RunConfigArgs};
 use crossbeam_channel::unbounded;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use tracing::{error, info, warn};
 
@@ -22,9 +22,11 @@ fn main() -> Result<()> {
         Commands::ListAudio => {
             audio::list_audio_devices()?;
         }
-        Commands::Run(config) => {
+        Commands::Run(args) => {
+            // Convert CLI args into core config type
+            let config: RunConfig = args.into();
+
             let (progress_tx, progress_rx) = unbounded();
-            let mut engine = AutosampleEngine::new();
 
             // Setup Ctrl+C handler
             let cancel_flag = Arc::new(AtomicBool::new(false));
@@ -39,18 +41,16 @@ fn main() -> Result<()> {
             let cancel_clone = cancel_flag.clone();
             let engine_handle = thread::spawn(move || {
                 let mut eng = AutosampleEngine::new();
-                
-                // Check cancel in a separate thread
+
+                // Optional cancel monitor (kept from your code)
                 let cancel_monitor = cancel_clone.clone();
-                thread::spawn(move || {
-                    loop {
-                        if cancel_monitor.load(Ordering::SeqCst) {
-                            break;
-                        }
-                        thread::sleep(std::time::Duration::from_millis(100));
+                thread::spawn(move || loop {
+                    if cancel_monitor.load(Ordering::SeqCst) {
+                        break;
                     }
+                    thread::sleep(std::time::Duration::from_millis(100));
                 });
-                
+
                 eng.run(config_clone, progress_tx)
             });
 
@@ -59,7 +59,7 @@ fn main() -> Result<()> {
                 if cancel_flag.load(Ordering::SeqCst) {
                     break;
                 }
-                
+
                 match event {
                     ProgressUpdate::Started { total_samples } => {
                         info!("Starting session: {} samples to record", total_samples);
