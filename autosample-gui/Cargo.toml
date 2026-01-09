@@ -1,0 +1,22 @@
+[package]
+name = "autosample-gui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "autosample-gui"
+path = "src/main.rs"
+
+[dependencies]
+autosample-core = { path = "../autosample-core" }
+eframe = { workspace = true }
+egui = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+crossbeam-channel = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+winres = "0.1"
