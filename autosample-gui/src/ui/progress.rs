@@ -1,9 +1,17 @@
-use crate::app::AutosampleApp;
 use crate::state::AppState;
 use autosample_core::{EngineStatus, LogLevel};
 use eframe::egui;
 
-pub fn show(ui: &mut egui::Ui, state: &mut AppState, app: &mut AutosampleApp) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunCommand {
+    Start,
+    Stop,
+    ClearLogs,
+}
+
+pub fn show(ui: &mut egui::Ui, state: &mut AppState) -> Option<RunCommand> {
+    let mut cmd = None;
+
     ui.heading("▶ Run Session");
     ui.add_space(10.0);
 
@@ -18,16 +26,15 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, app: &mut AutosampleApp) {
         };
 
         ui.label(egui::RichText::new(status_text).size(18.0));
-
         ui.add_space(20.0);
 
         if state.engine_status == EngineStatus::Idle || state.engine_status == EngineStatus::Completed {
             if ui.button("▶ Start").clicked() {
-                app.start_session();
+                cmd = Some(RunCommand::Start);
             }
         } else if state.engine_status == EngineStatus::Running {
             if ui.button("⏹ Stop").clicked() {
-                app.stop_session();
+                cmd = Some(RunCommand::Stop);
             }
         }
     });
@@ -40,22 +47,24 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, app: &mut AutosampleApp) {
             ui.label(egui::RichText::new("Progress").strong().size(16.0));
             ui.add_space(5.0);
 
-            let progress_fraction = state.progress.current_index as f32 / state.progress.total_samples as f32;
-            let progress_bar = egui::ProgressBar::new(progress_fraction)
-                .text(format!(
+            let denom = state.progress.total_samples.max(1) as f32;
+            let progress_fraction = state.progress.current_index as f32 / denom;
+
+            ui.add(
+                egui::ProgressBar::new(progress_fraction).text(format!(
                     "{}/{} samples",
                     state.progress.current_index, state.progress.total_samples
-                ));
-            ui.add(progress_bar);
+                )),
+            );
 
             ui.add_space(10.0);
 
-            ui.horizontal(|ui| {
-                ui.label(format!("Current: Note {} | Vel {} | RR {}",
-                    state.progress.current_note,
-                    state.progress.current_velocity,
-                    state.progress.current_rr));
-            });
+            ui.label(format!(
+                "Current: Note {} | Vel {} | RR {}",
+                state.progress.current_note,
+                state.progress.current_velocity,
+                state.progress.current_rr
+            ));
 
             ui.horizontal(|ui| {
                 ui.label(format!("✅ Completed: {}", state.progress.samples_completed));
@@ -72,8 +81,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, app: &mut AutosampleApp) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Log").strong().size(16.0));
             ui.add_space(10.0);
+
             if ui.button("Clear").clicked() {
-                state.logs.clear();
+                cmd = Some(RunCommand::ClearLogs);
             }
         });
 
@@ -97,4 +107,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState, app: &mut AutosampleApp) {
                 }
             });
     });
+
+    cmd
 }

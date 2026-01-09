@@ -21,7 +21,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 )
                 .show_ui(ui, |ui| {
                     for (idx, device) in state.midi_devices.iter().enumerate() {
-                        ui.selectable_value(&mut state.selected_midi_idx, Some(idx), &device.name);
+                        ui.selectable_value(
+                            &mut state.selected_midi_idx,
+                            Some(idx),
+                            &device.name,
+                        );
                     }
                 });
 
@@ -51,12 +55,17 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     state
                         .selected_audio_idx
                         .and_then(|idx| state.audio_devices.get(idx))
-                        .map(|d| format!("{} ({} Hz, {} ch)", d.name, d.sample_rate, d.channels))
+                        .map(|d| {
+                            format!("{} ({} Hz, {} ch)", d.name, d.sample_rate, d.channels)
+                        })
                         .unwrap_or_else(|| "Select device...".to_string()),
                 )
                 .show_ui(ui, |ui| {
                     for (idx, device) in state.audio_devices.iter().enumerate() {
-                        let label = format!("{} ({} Hz, {} ch)", device.name, device.sample_rate, device.channels);
+                        let label = format!(
+                            "{} ({} Hz, {} ch)",
+                            device.name, device.sample_rate, device.channels
+                        );
                         ui.selectable_value(&mut state.selected_audio_idx, Some(idx), label);
                     }
                 });

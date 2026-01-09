@@ -58,7 +58,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
             ui.horizontal(|ui| {
                 ui.label("Takes per note/velocity:");
-                ui.add(egui::DragValue::new(&mut state.config.round_robin).clamp_range(1..=10));
+                ui.add(
+                    egui::DragValue::new(&mut state.config.round_robin).clamp_range(1..=10),
+                );
             });
         });
 
@@ -87,9 +89,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::ComboBox::from_id_salt("format")
                     .selected_text(&state.config.format)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut state.config.format, "wav".to_string(), "WAV");
-                        ui.selectable_value(&mut state.config.format, "mp3".to_string(), "MP3");
-                        ui.selectable_value(&mut state.config.format, "both".to_string(), "Both");
+                        ui.selectable_value(
+                            &mut state.config.format,
+                            "wav".to_string(),
+                            "WAV",
+                        );
+                        ui.selectable_value(
+                            &mut state.config.format,
+                            "mp3".to_string(),
+                            "MP3",
+                        );
+                        ui.selectable_value(
+                            &mut state.config.format,
+                            "both".to_string(),
+                            "Both",
+                        );
                     });
             });
 

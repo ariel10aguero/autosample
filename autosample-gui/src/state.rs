@@ -1,7 +1,6 @@
 use autosample_core::{
-    AudioDeviceInfo, EngineEvent, EngineStatus, MidiPortInfo, RunConfig, SessionMetadata,
+    AudioDeviceInfo, EngineStatus, LogLevel, MidiPortInfo, ProgressUpdate, RunConfig,
 };
-use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -49,7 +48,7 @@ pub struct ProgressState {
 #[derive(Clone)]
 pub struct LogEntry {
     pub timestamp: String,
-    pub level: autosample_core::LogLevel,
+    pub level: LogLevel,
     pub message: String,
 }
 
@@ -80,7 +79,7 @@ impl AppState {
         }
     }
 
-    pub fn add_log(&mut self, level: autosample_core::LogLevel, message: String) {
+    pub fn add_log(&mut self, level: LogLevel, message: String) {
         self.logs.push(LogEntry {
             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
             level,
@@ -88,9 +87,9 @@ impl AppState {
         });
     }
 
-    pub fn handle_engine_event(&mut self, event: EngineEvent) {
+    pub fn handle_engine_event(&mut self, event: ProgressUpdate) {
         match event {
-            EngineEvent::Started { total_samples } => {
+            ProgressUpdate::Started { total_samples } => {
                 self.progress.total_samples = total_samples;
                 self.progress.current_index = 0;
                 self.progress.samples_completed = 0;
@@ -98,28 +97,34 @@ impl AppState {
                 self.progress.samples_skipped = 0;
                 self.engine_status = EngineStatus::Running;
             }
-            EngineEvent::SampleStarted { index, note, velocity, rr, .. } => {
+            ProgressUpdate::SampleStarted {
+                index,
+                note,
+                velocity,
+                rr,
+                ..
+            } => {
                 self.progress.current_index = index;
                 self.progress.current_note = note;
                 self.progress.current_velocity = velocity;
                 self.progress.current_rr = rr;
             }
-            EngineEvent::SampleCompleted { .. } => {
+            ProgressUpdate::SampleCompleted { .. } => {
                 self.progress.samples_completed += 1;
             }
-            EngineEvent::SampleSkipped { .. } => {
+            ProgressUpdate::SampleSkipped { .. } => {
                 self.progress.samples_skipped += 1;
             }
-            EngineEvent::SampleFailed { .. } => {
+            ProgressUpdate::SampleFailed { .. } => {
                 self.progress.samples_failed += 1;
             }
-            EngineEvent::Completed { .. } => {
+            ProgressUpdate::Completed { .. } => {
                 self.engine_status = EngineStatus::Completed;
             }
-            EngineEvent::Cancelled => {
+            ProgressUpdate::Cancelled => {
                 self.engine_status = EngineStatus::Idle;
             }
-            EngineEvent::Log { level, message } => {
+            ProgressUpdate::Log { level, message } => {
                 self.add_log(level, message);
             }
         }

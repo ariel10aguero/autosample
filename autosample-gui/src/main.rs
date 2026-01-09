@@ -14,22 +14,15 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1000.0, 700.0])
             .with_min_inner_size([800.0, 600.0])
-            .with_icon(load_icon()),
+            .with_title("Autosample"),
         ..Default::default()
     };
 
     eframe::run_native(
         "Autosample",
         options,
-        Box::new(|cc| Ok(Box::new(AutosampleApp::new(cc)))),
+        Box::new(|cc| {
+            Ok(Box::new(AutosampleApp::new(cc)))
+        }),
     )
-}
-
-fn load_icon() -> egui::IconData {
-    // TODO: Load app icon
-    egui::IconData {
-        rgba: vec![],
-        width: 0,
-        height: 0,
-    }
 }

@@ -1,11 +1,12 @@
 mod cli;
 
 use anyhow::Result;
-use autosample_core::{audio, midi, AutosampleEngine, EngineEvent, LogLevel};
+use autosample_core::{audio, midi, AutosampleEngine, LogLevel, ProgressUpdate};
 use clap::Parser;
 use cli::{Cli, Commands};
 use crossbeam_channel::unbounded;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use tracing::{error, info, warn};
 
@@ -26,53 +27,85 @@ fn main() -> Result<()> {
             let mut engine = AutosampleEngine::new();
 
             // Setup Ctrl+C handler
-            let engine_cancel = Arc::new(engine);
-            let r = engine_cancel.clone();
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+            let r = cancel_flag.clone();
             ctrlc::set_handler(move || {
                 warn!("Received Ctrl+C, stopping...");
-                r.cancel();
+                r.store(true, Ordering::SeqCst);
             })?;
 
             // Spawn engine thread
             let config_clone = config.clone();
+            let cancel_clone = cancel_flag.clone();
             let engine_handle = thread::spawn(move || {
                 let mut eng = AutosampleEngine::new();
+                
+                // Check cancel in a separate thread
+                let cancel_monitor = cancel_clone.clone();
+                thread::spawn(move || {
+                    loop {
+                        if cancel_monitor.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                });
+                
                 eng.run(config_clone, progress_tx)
             });
 
             // Process progress updates
             for event in progress_rx {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    break;
+                }
+                
                 match event {
-                    EngineEvent::Started { total_samples } => {
+                    ProgressUpdate::Started { total_samples } => {
                         info!("Starting session: {} samples to record", total_samples);
                     }
-                    EngineEvent::SampleStarted { index, total, note, velocity, rr } => {
-                        info!("[{}/{}] Recording note {}, vel {}, rr {}", index, total, note, velocity, rr);
+                    ProgressUpdate::SampleStarted {
+                        index,
+                        total,
+                        note,
+                        velocity,
+                        rr,
+                    } => {
+                        info!(
+                            "[{}/{}] Recording note {}, vel {}, rr {}",
+                            index, total, note, velocity, rr
+                        );
                     }
-                    EngineEvent::SampleCompleted { index, total, path, peak_db } => {
-                        info!("[{}/{}] Completed: {} (peak: {:.1} dB)", index, total, path, peak_db);
+                    ProgressUpdate::SampleCompleted {
+                        index,
+                        total,
+                        path,
+                        peak_db,
+                    } => {
+                        info!(
+                            "[{}/{}] Completed: {} (peak: {:.1} dB)",
+                            index, total, path, peak_db
+                        );
                     }
-                    EngineEvent::SampleSkipped { path, .. } => {
+                    ProgressUpdate::SampleSkipped { path, .. } => {
                         info!("Skipped: {}", path);
                     }
-                    EngineEvent::SampleFailed { error, .. } => {
+                    ProgressUpdate::SampleFailed { error, .. } => {
                         error!("Failed: {}", error);
                     }
-                    EngineEvent::Completed { samples_recorded } => {
+                    ProgressUpdate::Completed { samples_recorded } => {
                         info!("Session complete! {} samples recorded", samples_recorded);
                         break;
                     }
-                    EngineEvent::Cancelled => {
+                    ProgressUpdate::Cancelled => {
                         warn!("Session cancelled by user");
                         break;
                     }
-                    EngineEvent::Log { level, message } => {
-                        match level {
-                            LogLevel::Info => info!("{}", message),
-                            LogLevel::Warning => warn!("{}", message),
-                            LogLevel::Error => error!("{}", message),
-                        }
-                    }
+                    ProgressUpdate::Log { level, message } => match level {
+                        LogLevel::Info => info!("{}", message),
+                        LogLevel::Warning => warn!("{}", message),
+                        LogLevel::Error => error!("{}", message),
+                    },
                 }
             }
 

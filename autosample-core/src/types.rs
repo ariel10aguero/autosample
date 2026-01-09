@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunConfig {
@@ -96,14 +95,40 @@ pub struct SampleInfo {
 /// Progress updates sent from engine to UI
 #[derive(Debug, Clone)]
 pub enum ProgressUpdate {
-    Started { total_samples: usize },
-    SampleStarted { index: usize, total: usize, note: u8, velocity: u8, rr: u32 },
-    SampleCompleted { index: usize, total: usize, path: String, peak_db: f32 },
-    SampleSkipped { index: usize, total: usize, path: String },
-    SampleFailed { index: usize, total: usize, error: String },
-    Completed { samples_recorded: usize },
+    Started {
+        total_samples: usize,
+    },
+    SampleStarted {
+        index: usize,
+        total: usize,
+        note: u8,
+        velocity: u8,
+        rr: u32,
+    },
+    SampleCompleted {
+        index: usize,
+        total: usize,
+        path: String,
+        peak_db: f32,
+    },
+    SampleSkipped {
+        index: usize,
+        total: usize,
+        path: String,
+    },
+    SampleFailed {
+        index: usize,
+        total: usize,
+        error: String,
+    },
+    Completed {
+        samples_recorded: usize,
+    },
     Cancelled,
-    Log { level: LogLevel, message: String },
+    Log {
+        level: LogLevel,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

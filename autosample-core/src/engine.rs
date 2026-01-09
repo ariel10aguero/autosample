@@ -8,7 +8,7 @@ use crate::parse::{parse_notes, parse_velocities};
 use crate::ringbuf::{consume_audio_packets, RingBuffer};
 use crate::types::*;
 use anyhow::Result;
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use hound::WavSpec;
 use std::fs;
 use std::path::PathBuf;
@@ -16,8 +16,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-
-pub type EngineEvent = ProgressUpdate;
 
 pub struct AutosampleEngine {
     cancel_flag: Arc<AtomicBool>,
@@ -37,7 +35,7 @@ impl AutosampleEngine {
     pub fn run(
         &mut self,
         config: RunConfig,
-        progress_tx: Sender<EngineEvent>,
+        progress_tx: Sender<ProgressUpdate>,
     ) -> Result<SessionMetadata> {
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -81,14 +79,9 @@ impl AutosampleEngine {
 
         // Setup audio capture
         let audio_device = find_audio_device(&config.audio_in)?;
-        let (audio_tx, audio_rx) = unbounded();
+        let (audio_tx, audio_rx) = crossbeam_channel::unbounded();
 
-        let audio_capture = start_audio_capture(
-            audio_device,
-            config.sr,
-            config.channels,
-            audio_tx,
-        )?;
+        let audio_capture = start_audio_capture(audio_device, config.sr, config.channels, audio_tx)?;
 
         let sample_rate = audio_capture.config.sample_rate;
         let channels = audio_capture.config.channels;
@@ -115,7 +108,8 @@ impl AutosampleEngine {
 
         // Ring buffer setup
         let max_duration_ms = config.preroll_ms + config.hold_ms + config.tail_ms + 1000;
-        let ring_size = (sample_rate as usize * channels as usize * max_duration_ms as usize) / 1000;
+        let ring_size =
+            (sample_rate as usize * channels as usize * max_duration_ms as usize) / 1000;
         let mut ring = RingBuffer::new(ring_size * 2);
 
         let mut session = SessionMetadata {
@@ -255,9 +249,12 @@ fn capture_sample(
     sample_rate: u32,
     channels: u16,
 ) -> Result<Vec<f32>> {
-    let preroll_samples = (sample_rate as usize * channels as usize * config.preroll_ms as usize) / 1000;
-    let hold_samples = (sample_rate as usize * channels as usize * config.hold_ms as usize) / 1000;
-    let tail_samples = (sample_rate as usize * channels as usize * config.tail_ms as usize) / 1000;
+    let preroll_samples =
+        (sample_rate as usize * channels as usize * config.preroll_ms as usize) / 1000;
+    let hold_samples =
+        (sample_rate as usize * channels as usize * config.hold_ms as usize) / 1000;
+    let tail_samples =
+        (sample_rate as usize * channels as usize * config.tail_ms as usize) / 1000;
     let total_samples = preroll_samples + hold_samples + tail_samples;
 
     ring.clear();
@@ -293,7 +290,8 @@ fn process_audio(samples: &[f32], config: &RunConfig, channels: u16) -> Vec<f32>
 
     if let Some(threshold_db) = config.trim_threshold_db {
         let min_tail_samples = (config.sr as usize * channels as usize * 100) / 1000;
-        let (trimmed, _, _) = trim_silence(&processed, threshold_db, channels as usize, min_tail_samples);
+        let (trimmed, _, _) =
+            trim_silence(&processed, threshold_db, channels as usize, min_tail_samples);
         processed = trimmed;
     }
 
@@ -359,7 +357,9 @@ fn build_file_path(
 }
 
 fn midi_note_to_name(note: u8) -> String {
-    let names = ["C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B"];
+    let names = [
+        "C", "Cs", "D", "Ds", "E", "F", "Fs", "G", "Gs", "A", "As", "B",
+    ];
     let octave = (note / 12) as i32 - 1;
     let pitch = note % 12;
     format!("{}{}", names[pitch as usize], octave)
