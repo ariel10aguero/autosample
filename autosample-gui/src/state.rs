@@ -124,9 +124,10 @@ impl AppState {
         Ok(())
     }
 
-    pub fn load_preset(&mut self, path: &str) -> anyhow::Result<()> {
-        let json = std::fs::read_to_string(path)?;
-        self.config = serde_json::from_str(&json)?;
-        Ok(())
+    pub fn clear_project(&mut self) {
+        self.logs.clear();
+        self.progress = ProgressState::default();
+        self.engine_status = EngineStatus::Idle;
+        self.preset_name.clear();
     }
 }

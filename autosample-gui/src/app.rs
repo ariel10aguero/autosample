@@ -75,11 +75,51 @@ impl eframe::App for AutosampleApp {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Load Preset...").clicked() {
-                        // TODO: File dialog
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .pick_file()
+                        {
+                            match self.state.load_preset(&path.display().to_string()) {
+                                Ok(_) => {
+                                    self.state.add_log(
+                                        autosample_core::LogLevel::Info,
+                                        format!("Loaded preset from {}", path.display()),
+                                    );
+                                }
+                                Err(e) => {
+                                    self.state.add_log(
+                                        autosample_core::LogLevel::Error,
+                                        format!("Failed to load preset: {}", e),
+                                    );
+                                }
+                            }
+                        }
                         ui.close_menu();
                     }
                     if ui.button("Save Preset...").clicked() {
-                        // TODO: File dialog
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("JSON", &["json"])
+                            .save_file()
+                        {
+                            let mut path_str = path.display().to_string();
+                            if !path_str.ends_with(".json") {
+                                path_str.push_str(".json");
+                            }
+                            match self.state.save_preset(&path_str) {
+                                Ok(_) => {
+                                    self.state.add_log(
+                                        autosample_core::LogLevel::Info,
+                                        format!("Saved preset to {}", path_str),
+                                    );
+                                }
+                                Err(e) => {
+                                    self.state.add_log(
+                                        autosample_core::LogLevel::Error,
+                                        format!("Failed to save preset: {}", e),
+                                    );
+                                }
+                            }
+                        }
                         ui.close_menu();
                     }
                     ui.separator();
@@ -102,6 +142,7 @@ impl eframe::App for AutosampleApp {
                 ui::progress::RunCommand::Start => self.start_session(),
                 ui::progress::RunCommand::Stop => self.stop_session(),
                 ui::progress::RunCommand::ClearLogs => self.state.logs.clear(),
+                ui::progress::RunCommand::ClearProject => self.state.clear_project(),
             }
         }
     }

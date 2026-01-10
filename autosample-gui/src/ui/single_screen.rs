@@ -196,6 +196,10 @@ fn show_run_with_start_gate(
             if ui.button("Clear").clicked() {
                 cmd = Some(RunCommand::ClearLogs);
             }
+
+            if ui.button("Clear Project").clicked() {
+                cmd = Some(RunCommand::ClearProject);
+            }
         });
 
         ui.add_space(5.0);

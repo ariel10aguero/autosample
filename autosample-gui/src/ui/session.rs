@@ -53,7 +53,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
         ui.horizontal(|ui| {
             ui.label("Takes:");
-            ui.add(egui::DragValue::new(&mut state.config.round_robin).clamp_range(1..=10));
+            ui.add(egui::DragValue::new(&mut state.config.round_robin).range(1..=10));
         });
     });
 
@@ -67,7 +67,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             ui.label("Directory:");
             ui.text_edit_singleline(&mut state.config.output);
             if ui.button("📁").on_hover_text("Choose output directory").clicked() {
-                // TODO: Directory picker
+                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    state.config.output = path.display().to_string();
+                }
             }
         });
 
