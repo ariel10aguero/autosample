@@ -4,9 +4,6 @@ use autosample_core::{
 
 #[derive(Clone)]
 pub struct AppState {
-    // Tabs
-    pub active_tab: Tab,
-
     // Devices
     pub midi_devices: Vec<MidiPortInfo>,
     pub audio_devices: Vec<AudioDeviceInfo>,
@@ -23,14 +20,6 @@ pub struct AppState {
 
     // Presets
     pub preset_name: String,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub enum Tab {
-    Devices,
-    Session,
-    Processing,
-    Run,
 }
 
 #[derive(Clone, Default)]
@@ -55,7 +44,6 @@ pub struct LogEntry {
 impl Default for AppState {
     fn default() -> Self {
         Self {
-            active_tab: Tab::Devices,
             midi_devices: Vec::new(),
             audio_devices: Vec::new(),
             selected_midi_idx: None,

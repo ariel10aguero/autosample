@@ -1,10 +1,11 @@
-use crate::state::{AppState, Tab};
+// src/app.rs
+use crate::state::AppState;
 use crate::ui;
 use autosample_core::{AutosampleEngine, EngineStatus};
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 pub struct AutosampleApp {
@@ -95,36 +96,13 @@ impl eframe::App for AutosampleApp {
             });
         });
 
-        // Tab bar
-        egui::TopBottomPanel::top("tab_bar").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.state.active_tab, Tab::Devices, "🔌 Devices");
-                ui.selectable_value(&mut self.state.active_tab, Tab::Session, "🎹 Session");
-                ui.selectable_value(
-                    &mut self.state.active_tab,
-                    Tab::Processing,
-                    "⚙ Processing",
-                );
-                ui.selectable_value(&mut self.state.active_tab, Tab::Run, "▶ Run");
-            });
-        });
-
-        // Main content area
-        egui::CentralPanel::default().show(ctx, |ui| {
-            match self.state.active_tab {
-                Tab::Devices => ui::devices::show(ui, &mut self.state),
-                Tab::Session => ui::session::show(ui, &mut self.state),
-                Tab::Processing => ui::processing::show(ui, &mut self.state),
-                Tab::Run => {
-                    if let Some(cmd) = ui::progress::show(ui, &mut self.state) {
-                        match cmd {
-                            ui::progress::RunCommand::Start => self.start_session(),
-                            ui::progress::RunCommand::Stop => self.stop_session(),
-                            ui::progress::RunCommand::ClearLogs => self.state.logs.clear(),
-                        }
-                    }
-                }
+        // Single-screen UI
+        if let Some(cmd) = ui::single_screen::show(ctx, &mut self.state) {
+            match cmd {
+                ui::progress::RunCommand::Start => self.start_session(),
+                ui::progress::RunCommand::Stop => self.stop_session(),
+                ui::progress::RunCommand::ClearLogs => self.state.logs.clear(),
             }
-        });
+        }
     }
 }
