@@ -29,20 +29,22 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(egui::RichText::new("Timing").strong().size(16.0));
         ui.add_space(5.0);
 
-        ui.horizontal(|ui| {
-            ui.label("Preroll:");
-            ui.add(egui::DragValue::new(&mut state.config.preroll_ms).suffix(" ms"));
-        });
+        egui::Grid::new("timing_grid")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Preroll:");
+                ui.add(egui::DragValue::new(&mut state.config.preroll_ms).suffix(" ms"));
+                ui.end_row();
 
-        ui.horizontal(|ui| {
-            ui.label("Hold:");
-            ui.add(egui::DragValue::new(&mut state.config.hold_ms).suffix(" ms"));
-        });
+                ui.label("Hold:");
+                ui.add(egui::DragValue::new(&mut state.config.hold_ms).suffix(" ms"));
+                ui.end_row();
 
-        ui.horizontal(|ui| {
-            ui.label("Tail:");
-            ui.add(egui::DragValue::new(&mut state.config.tail_ms).suffix(" ms"));
-        });
+                ui.label("Tail:");
+                ui.add(egui::DragValue::new(&mut state.config.tail_ms).suffix(" ms"));
+                ui.end_row();
+            });
     });
 
     ui.add_space(10.0);

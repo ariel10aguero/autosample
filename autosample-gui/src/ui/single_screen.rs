@@ -14,10 +14,15 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
         .min_width(320.0)
         .show(ctx, |ui| {
             ui.vertical(|ui| {
-                ui.heading("Setup");
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(8.0);
+                    ui.heading("Setup");
+                });
                 ui.add_space(6.0);
 
                 ui.horizontal(|ui| {
+                    ui.add_space(8.0);
                     ui.label("Preset:");
                     ui.text_edit_singleline(&mut state.preset_name);
                 });
@@ -28,6 +33,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
+                        ui.add_space(12.0);
+
                         egui::CollapsingHeader::new("🔌 Devices")
                             .default_open(true)
                             .show(ui, |ui| {
@@ -49,6 +56,8 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                             .show(ui, |ui| {
                                 ui::processing::show(ui, state);
                             });
+
+                        ui.add_space(12.0);
                     });
             });
         });
