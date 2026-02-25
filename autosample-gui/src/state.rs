@@ -124,6 +124,28 @@ impl AppState {
         Ok(())
     }
 
+    pub fn load_preset(&mut self, path: &str) -> anyhow::Result<()> {
+        let json = std::fs::read_to_string(path)?;
+        self.config = serde_json::from_str(&json)?;
+
+        self.selected_midi_idx = self
+            .midi_devices
+            .iter()
+            .position(|d| d.name == self.config.midi_out);
+        self.selected_audio_idx = self
+            .audio_devices
+            .iter()
+            .position(|d| d.name == self.config.audio_in);
+
+        self.preset_name = std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+
+        Ok(())
+    }
+
     pub fn clear_project(&mut self) {
         self.logs.clear();
         self.progress = ProgressState::default();
