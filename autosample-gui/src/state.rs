@@ -59,11 +59,46 @@ impl Default for AppState {
 
 impl AppState {
     pub fn refresh_devices(&mut self) {
+        let preferred_midi = self.config.midi_out.trim().to_string();
+        let preferred_audio = self.config.audio_in.trim().to_string();
+
         if let Ok(midi) = autosample_core::midi::get_midi_ports() {
             self.midi_devices = midi;
         }
         if let Ok(audio) = autosample_core::audio::get_audio_devices() {
             self.audio_devices = audio;
+        }
+
+        self.selected_midi_idx = if !preferred_midi.is_empty() {
+            self.midi_devices.iter().position(|d| d.name == preferred_midi)
+        } else if self.midi_devices.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+
+        self.selected_audio_idx = if !preferred_audio.is_empty() {
+            self.audio_devices.iter().position(|d| d.name == preferred_audio)
+        } else if self.audio_devices.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+
+        if let Some(idx) = self.selected_midi_idx {
+            if let Some(device) = self.midi_devices.get(idx) {
+                self.config.midi_out = device.name.clone();
+            }
+        } else {
+            self.config.midi_out.clear();
+        }
+
+        if let Some(idx) = self.selected_audio_idx {
+            if let Some(device) = self.audio_devices.get(idx) {
+                self.config.audio_in = device.name.clone();
+            }
+        } else {
+            self.config.audio_in.clear();
         }
     }
 

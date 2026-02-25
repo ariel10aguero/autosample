@@ -1,7 +1,7 @@
 // src/app.rs
 use crate::state::AppState;
 use crate::ui;
-use autosample_core::{AutosampleEngine, EngineStatus};
+use autosample_core::{AutosampleEngine, EngineStatus, LogLevel, ProgressUpdate};
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,10 +40,17 @@ impl AutosampleApp {
 
         let config = self.state.config.clone();
         let running = self.engine_running.clone();
+        let tx_for_errors = tx.clone();
 
         thread::spawn(move || {
             let mut engine = AutosampleEngine::new();
-            let _ = engine.run(config, tx);
+            if let Err(e) = engine.run(config, tx) {
+                let _ = tx_for_errors.send(ProgressUpdate::Log {
+                    level: LogLevel::Error,
+                    message: format!("Run failed: {}", e),
+                });
+                let _ = tx_for_errors.send(ProgressUpdate::Cancelled);
+            }
             running.store(false, Ordering::SeqCst);
         });
 

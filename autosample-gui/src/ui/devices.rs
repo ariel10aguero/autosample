@@ -29,9 +29,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
             let refresh = ui.add(egui::Button::new("🔄")).on_hover_text("Refresh MIDI devices");
             if refresh.clicked() {
-                if let Ok(devices) = autosample_core::midi::get_midi_ports() {
-                    state.midi_devices = devices;
-                }
+                state.refresh_devices();
             }
         });
 
@@ -73,9 +71,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
             let refresh = ui.add(egui::Button::new("🔄")).on_hover_text("Refresh audio devices");
             if refresh.clicked() {
-                if let Ok(devices) = autosample_core::audio::get_audio_devices() {
-                    state.audio_devices = devices;
-                }
+                state.refresh_devices();
             }
         });
 

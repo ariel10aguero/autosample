@@ -145,36 +145,43 @@ fn show_run_with_start_gate(
     let mut cmd = None;
 
     // Status and controls
-    ui.horizontal(|ui| {
-        let status_text = match state.engine_status {
-            EngineStatus::Idle => "⚪ Idle",
-            EngineStatus::Running => "🟢 Running",
-            EngineStatus::Paused => "🟡 Paused",
-            EngineStatus::Completed => "✅ Completed",
-            EngineStatus::Error => "🔴 Error",
-        };
+    ui.add_space(4.0);
+    ui.vertical(|ui| {
+        ui.horizontal(|ui| {
+            let status_text = match state.engine_status {
+                EngineStatus::Idle => "Idle",
+                EngineStatus::Running => "🟢 Running",
+                EngineStatus::Paused => "🟡 Paused",
+                EngineStatus::Completed => "✅ Completed",
+                EngineStatus::Error => "🔴 Error",
+            };
 
-        ui.label(egui::RichText::new(status_text).size(18.0));
-        ui.add_space(20.0);
+            ui.label(egui::RichText::new(status_text).size(18.0));
+            ui.add_space(20.0);
 
-        if state.engine_status == EngineStatus::Idle || state.engine_status == EngineStatus::Completed
+            if state.engine_status == EngineStatus::Idle
+                || state.engine_status == EngineStatus::Completed
+            {
+                let start_btn = ui.add_enabled(ready, egui::Button::new("▶ Start"));
+                if start_btn.clicked() {
+                    cmd = Some(RunCommand::Start);
+                }
+            } else if state.engine_status == EngineStatus::Running {
+                if ui.button("⏹ Stop").clicked() {
+                    cmd = Some(RunCommand::Stop);
+                }
+            }
+        });
+
+        if (state.engine_status == EngineStatus::Idle
+            || state.engine_status == EngineStatus::Completed)
+            && !ready
         {
-            let start_btn = ui.add_enabled(ready, egui::Button::new("▶ Start"));
-            if start_btn.clicked() {
-                cmd = Some(RunCommand::Start);
-            }
-
-            if !ready {
-                ui.add_space(10.0);
-                ui.label(
-                    egui::RichText::new("Fix checklist items to enable Start")
-                        .color(egui::Color32::GRAY),
-                );
-            }
-        } else if state.engine_status == EngineStatus::Running {
-            if ui.button("⏹ Stop").clicked() {
-                cmd = Some(RunCommand::Stop);
-            }
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Fix checklist items to enable Start")
+                    .color(egui::Color32::GRAY),
+            );
         }
     });
 
