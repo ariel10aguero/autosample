@@ -89,6 +89,25 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
         ui.add_space(8.0);
 
         cmd = show_run_with_start_gate(ui, state, ready);
+
+        let logo_size = egui::vec2(104.0, 104.0);
+        let logo_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                ui.max_rect().right() - logo_size.x - 8.0,
+                ui.max_rect().bottom() - logo_size.y,
+            ),
+            logo_size,
+        );
+        ui.put(
+            logo_rect,
+            egui::Image::new(egui::include_image!("../../assets/logo.png"))
+                // Crop away black padding baked into the source image.
+                .uv(egui::Rect::from_min_max(
+                    egui::pos2(0.12, 0.22),
+                    egui::pos2(0.88, 0.80),
+                ))
+                .fit_to_exact_size(logo_size),
+        );
     });
 
     cmd

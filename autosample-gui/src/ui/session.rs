@@ -9,7 +9,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(egui::RichText::new("Note Range").strong().size(16.0));
         ui.add_space(5.0);
 
-        ui.label(egui::RichText::new("Examples: C2..C6, C4,E4,G4, A4").weak());
+        ui.label(egui::RichText::new("Range: C2..C6 | List: C4,E4,G4 | Single: A4").weak());
         ui.text_edit_singleline(&mut state.config.notes);
     });
 
@@ -19,7 +19,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(egui::RichText::new("Velocity Layers").strong().size(16.0));
         ui.add_space(5.0);
 
-        ui.label(egui::RichText::new("Examples: 127..1:16, 127,100,64").weak());
+        ui.label(
+            egui::RichText::new("Step: 127..15:16 | List: 127,100,64 | Single: 100").weak(),
+        );
         ui.text_edit_singleline(&mut state.config.vel);
     });
 
