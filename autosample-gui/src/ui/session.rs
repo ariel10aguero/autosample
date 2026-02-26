@@ -61,8 +61,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         });
     });
 
-    ui.add_space(10.0);
+}
 
+pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
     ui.group(|ui| {
         ui.label(egui::RichText::new("Output").strong().size(16.0));
         ui.add_space(5.0);

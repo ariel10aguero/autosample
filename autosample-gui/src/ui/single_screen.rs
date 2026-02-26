@@ -190,6 +190,9 @@ fn show_run_with_start_gate(
 
     ui.add_space(10.0);
 
+    ui::session::show_output(ui, state);
+    ui.add_space(10.0);
+
     // Progress
     if state.progress.total_samples > 0 {
         ui.group(|ui| {
@@ -225,41 +228,49 @@ fn show_run_with_start_gate(
         ui.add_space(10.0);
     }
 
-    // Log output
-    ui.group(|ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Log").strong().size(16.0));
-            ui.add_space(10.0);
+    const LOG_PANEL_HEIGHT: f32 = 280.0;
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), LOG_PANEL_HEIGHT),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Log").strong().size(16.0));
+                    ui.add_space(10.0);
 
-            if ui.button("Clear").clicked() {
-                cmd = Some(RunCommand::ClearLogs);
-            }
+                    if ui.button("Clear").clicked() {
+                        cmd = Some(RunCommand::ClearLogs);
+                    }
 
-            if ui.button("Clear Project").clicked() {
-                cmd = Some(RunCommand::ClearProject);
-            }
-        });
+                    if ui.button("Clear Project").clicked() {
+                        cmd = Some(RunCommand::ClearProject);
+                    }
+                });
 
-        ui.add_space(5.0);
+                ui.add_space(5.0);
 
-        egui::ScrollArea::vertical()
-            .max_height(320.0)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for log in &state.logs {
-                    let color = match log.level {
-                        LogLevel::Info => egui::Color32::LIGHT_GRAY,
-                        LogLevel::Warning => egui::Color32::YELLOW,
-                        LogLevel::Error => egui::Color32::RED,
-                    };
+                egui::ScrollArea::vertical()
+                    .max_height(LOG_PANEL_HEIGHT - 56.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for log in &state.logs {
+                            let color = match log.level {
+                                LogLevel::Info => egui::Color32::LIGHT_GRAY,
+                                LogLevel::Warning => egui::Color32::YELLOW,
+                                LogLevel::Error => egui::Color32::RED,
+                            };
 
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(&log.timestamp).color(egui::Color32::GRAY));
-                        ui.label(egui::RichText::new(&log.message).color(color));
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(&log.timestamp).color(egui::Color32::GRAY),
+                                );
+                                ui.label(egui::RichText::new(&log.message).color(color));
+                            });
+                        }
                     });
-                }
             });
-    });
+        },
+    );
 
     cmd
 }
