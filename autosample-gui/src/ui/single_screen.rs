@@ -25,7 +25,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
                     ui.label("Preset:");
-                    ui.text_edit_singleline(&mut state.preset_name);
+                    ui.add(egui::TextEdit::singleline(&mut state.preset_name).hint_text("Untitled"));
                 });
 
                 ui.add_space(8.0);
