@@ -7,6 +7,7 @@ use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 pub struct AutosampleApp {
     pub state: AppState,
@@ -20,7 +21,7 @@ impl AutosampleApp {
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
         let mut state = AppState::default();
-        state.refresh_devices();
+        state.request_device_scan();
 
         Self {
             state,
@@ -33,6 +34,37 @@ impl AutosampleApp {
         if self.engine_running.load(Ordering::SeqCst) {
             return; // Already running
         }
+        if self.state.is_device_scan_running() {
+            self.state.add_log(
+                LogLevel::Warning,
+                "Start blocked: device refresh is still running. Wait until scanning completes."
+                    .to_string(),
+            );
+            return;
+        }
+
+        let midi_target = self.state.config.midi_out.clone();
+        self.state.add_log(
+            LogLevel::Info,
+            format!(
+                "Preparing MIDI connection on app thread for '{}'",
+                midi_target
+            ),
+        );
+        let (midi_conn, connected_port_name, available_ports) =
+            match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    self.state.add_log(
+                        LogLevel::Error,
+                        format!(
+                            "Start failed before engine launch:\nMIDI output initialization/connection failed for '{}': {:#}",
+                            midi_target, error
+                        ),
+                    );
+                    return;
+                }
+            };
 
         let (tx, rx) = unbounded();
         self.event_rx = Some(rx);
@@ -44,10 +76,16 @@ impl AutosampleApp {
 
         thread::spawn(move || {
             let mut engine = AutosampleEngine::new();
-            if let Err(e) = engine.run(config, tx) {
+            if let Err(e) = engine.run_with_connected_midi(
+                config,
+                tx,
+                midi_conn,
+                connected_port_name,
+                available_ports,
+            ) {
                 let _ = tx_for_errors.send(ProgressUpdate::Log {
                     level: LogLevel::Error,
-                    message: format!("Run failed: {}", e),
+                    message: format!("Run failed:\n{:#}", e),
                 });
                 let _ = tx_for_errors.send(ProgressUpdate::Cancelled);
             }
@@ -66,6 +104,8 @@ impl AutosampleApp {
 
 impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.state.poll_device_scan_result();
+
         // Process engine events
         if let Some(rx) = &self.event_rx {
             while let Ok(event) = rx.try_recv() {
@@ -76,6 +116,9 @@ impl eframe::App for AutosampleApp {
         // Request continuous repaint while running
         if self.state.engine_status == EngineStatus::Running {
             ctx.request_repaint();
+        }
+        if self.state.is_device_scan_running() {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
 
         // Top menu bar

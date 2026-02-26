@@ -1,6 +1,9 @@
 use autosample_core::{
     AudioDeviceInfo, EngineStatus, LogLevel, MidiPortInfo, ProgressUpdate, RunConfig,
 };
+use crossbeam_channel::{Receiver, TryRecvError};
+
+use crate::device_scan::{self, DeviceScanResult};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -20,6 +23,11 @@ pub struct AppState {
 
     // Presets
     pub preset_name: String,
+
+    // Device scan state
+    pub device_scan_state: DeviceScanState,
+    device_scan_rx: Option<Receiver<device_scan::DeviceScanOutcome>>,
+    pending_midi_scan_error: Option<String>,
 }
 
 #[derive(Clone, Default)]
@@ -41,6 +49,13 @@ pub struct LogEntry {
     pub message: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeviceScanState {
+    Idle,
+    Scanning,
+    Failed(String),
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -53,45 +68,138 @@ impl Default for AppState {
             progress: ProgressState::default(),
             logs: Vec::new(),
             preset_name: String::new(),
+            device_scan_state: DeviceScanState::Idle,
+            device_scan_rx: None,
+            pending_midi_scan_error: None,
         }
     }
 }
 
 impl AppState {
-    pub fn refresh_devices(&mut self) {
+    pub fn request_device_scan(&mut self) {
+        if self.engine_status == EngineStatus::Running {
+            self.add_log(
+                LogLevel::Warning,
+                "Device refresh ignored: sampling is currently running.".to_string(),
+            );
+            return;
+        }
+        if self.is_device_scan_running() {
+            self.add_log(
+                LogLevel::Info,
+                "Device refresh already in progress.".to_string(),
+            );
+            return;
+        }
+
         let preferred_midi = self.config.midi_out.trim().to_string();
+        self.pending_midi_scan_error = None;
+
+        // Run MIDI scan on the app thread to avoid backend init issues in short-lived worker threads.
+        match autosample_core::midi::get_midi_ports() {
+            Ok(midi_devices) => {
+                self.apply_midi_scan_result(midi_devices, &preferred_midi);
+            }
+            Err(error) => {
+                let message = format!("MIDI scan failed: {}", error);
+                self.pending_midi_scan_error = Some(message.clone());
+                self.add_log(LogLevel::Warning, message);
+            }
+        }
+
+        self.device_scan_state = DeviceScanState::Scanning;
+        self.device_scan_rx = Some(device_scan::spawn_device_scan());
+        self.add_log(
+            LogLevel::Info,
+            "Refreshing device list (MIDI now, audio in background)...".to_string(),
+        );
+    }
+
+    pub fn poll_device_scan_result(&mut self) {
+        let Some(rx) = self.device_scan_rx.clone() else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(outcome) => {
+                self.device_scan_rx = None;
+                match outcome {
+                    Ok(result) => {
+                        self.apply_audio_scan_result(result);
+                        let midi_error = self.pending_midi_scan_error.take();
+                        if let Some(error) = midi_error {
+                            self.device_scan_state = DeviceScanState::Failed(error.clone());
+                            self.add_log(
+                                LogLevel::Warning,
+                                format!(
+                                    "Device refresh completed with warnings: {}",
+                                    error
+                                ),
+                            );
+                        } else {
+                            self.device_scan_state = DeviceScanState::Idle;
+                            self.add_log(
+                                LogLevel::Info,
+                                format!(
+                                    "Device refresh complete: {} MIDI, {} audio",
+                                    self.midi_devices.len(),
+                                    self.audio_devices.len()
+                                ),
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        let combined_error = if let Some(midi_error) =
+                            self.pending_midi_scan_error.take()
+                        {
+                            format!("{}; {}", midi_error, error)
+                        } else {
+                            error
+                        };
+                        self.device_scan_state = DeviceScanState::Failed(combined_error.clone());
+                        self.add_log(
+                            LogLevel::Warning,
+                            format!("Device refresh failed: {}", combined_error),
+                        );
+                    }
+                }
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.device_scan_rx = None;
+                let mut error = "Device refresh worker disconnected".to_string();
+                if let Some(midi_error) = self.pending_midi_scan_error.take() {
+                    error = format!("{}; {}", midi_error, error);
+                }
+                self.device_scan_state = DeviceScanState::Failed(error.clone());
+                self.add_log(
+                    LogLevel::Warning,
+                    format!("Device refresh failed: {}", error),
+                );
+            }
+        }
+    }
+
+    pub fn is_device_scan_running(&self) -> bool {
+        matches!(self.device_scan_state, DeviceScanState::Scanning)
+    }
+
+    pub fn device_scan_error(&self) -> Option<&str> {
+        match &self.device_scan_state {
+            DeviceScanState::Failed(message) => Some(message.as_str()),
+            _ => None,
+        }
+    }
+
+    fn apply_audio_scan_result(&mut self, result: DeviceScanResult) {
         let preferred_audio = self.config.audio_in.trim().to_string();
 
-        if let Ok(midi) = autosample_core::midi::get_midi_ports() {
-            self.midi_devices = midi;
-        }
-        if let Ok(audio) = autosample_core::audio::get_audio_devices() {
-            self.audio_devices = audio;
-        }
-
-        self.selected_midi_idx = if !preferred_midi.is_empty() {
-            self.midi_devices.iter().position(|d| d.name == preferred_midi)
-        } else if self.midi_devices.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-
-        self.selected_audio_idx = if !preferred_audio.is_empty() {
-            self.audio_devices.iter().position(|d| d.name == preferred_audio)
-        } else if self.audio_devices.is_empty() {
-            None
-        } else {
-            Some(0)
-        };
-
-        if let Some(idx) = self.selected_midi_idx {
-            if let Some(device) = self.midi_devices.get(idx) {
-                self.config.midi_out = device.name.clone();
-            }
-        } else {
-            self.config.midi_out.clear();
-        }
+        self.audio_devices = result.audio_devices;
+        self.selected_audio_idx = Self::resolve_selection_index(
+            &preferred_audio,
+            &self.audio_devices,
+            |device| device.name.as_str(),
+        );
 
         if let Some(idx) = self.selected_audio_idx {
             if let Some(device) = self.audio_devices.get(idx) {
@@ -100,6 +208,41 @@ impl AppState {
         } else {
             self.config.audio_in.clear();
         }
+    }
+
+    fn apply_midi_scan_result(&mut self, midi_devices: Vec<MidiPortInfo>, preferred_midi: &str) {
+        self.midi_devices = midi_devices;
+        self.selected_midi_idx = Self::resolve_selection_index(
+            preferred_midi,
+            &self.midi_devices,
+            |device| device.name.as_str(),
+        );
+
+        if let Some(idx) = self.selected_midi_idx {
+            if let Some(device) = self.midi_devices.get(idx) {
+                self.config.midi_out = device.name.clone();
+            }
+        } else {
+            self.config.midi_out.clear();
+        }
+    }
+
+    fn resolve_selection_index<T, F>(preferred: &str, devices: &[T], get_name: F) -> Option<usize>
+    where
+        F: Fn(&T) -> &str,
+    {
+        if devices.is_empty() {
+            return None;
+        }
+
+        if preferred.is_empty() {
+            return Some(0);
+        }
+
+        devices
+            .iter()
+            .position(|device| get_name(device) == preferred)
+            .or(Some(0))
     }
 
     pub fn add_log(&mut self, level: LogLevel, message: String) {

@@ -131,6 +131,9 @@ fn readiness_check(state: &AppState) -> (bool, Vec<&'static str>) {
     if state.config.vel.trim().is_empty() {
         missing.push("Enter velocity layers");
     }
+    if state.is_device_scan_running() {
+        missing.push("Wait for device refresh to complete");
+    }
 
     (missing.is_empty(), missing)
 }

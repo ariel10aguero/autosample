@@ -2,14 +2,15 @@ use crate::audio::{find_audio_device, start_audio_capture};
 use crate::dsp::{apply_fade, get_peak_db, normalize_audio, trim_silence};
 use crate::export::{check_ffmpeg_available, convert_to_mp3, write_wav};
 use crate::midi::{
-    connect_midi_output, find_midi_port, send_all_notes_off, send_note_off, send_note_on,
+    connect_midi_output_by_name, send_all_notes_off, send_note_off, send_note_on,
 };
 use crate::parse::{parse_notes, parse_velocities};
 use crate::ringbuf::{consume_audio_packets, RingBuffer};
 use crate::types::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
 use hound::WavSpec;
+use midir::MidiOutputConnection;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +37,30 @@ impl AutosampleEngine {
         &mut self,
         config: RunConfig,
         progress_tx: Sender<ProgressUpdate>,
+    ) -> Result<SessionMetadata> {
+        self.run_internal(config, progress_tx, None)
+    }
+
+    pub fn run_with_connected_midi(
+        &mut self,
+        config: RunConfig,
+        progress_tx: Sender<ProgressUpdate>,
+        midi_conn: MidiOutputConnection,
+        connected_port_name: String,
+        available_ports: Vec<String>,
+    ) -> Result<SessionMetadata> {
+        self.run_internal(
+            config,
+            progress_tx,
+            Some((midi_conn, connected_port_name, available_ports)),
+        )
+    }
+
+    fn run_internal(
+        &mut self,
+        config: RunConfig,
+        progress_tx: Sender<ProgressUpdate>,
+        preconnected_midi: Option<(MidiOutputConnection, String, Vec<String>)>,
     ) -> Result<SessionMetadata> {
         self.cancel_flag.store(false, Ordering::SeqCst);
 
@@ -69,12 +94,27 @@ impl AutosampleEngine {
         });
 
         // Connect MIDI
-        let midi_port = find_midi_port(&config.midi_out)?;
-        let mut midi_conn = connect_midi_output(midi_port)?;
+        let (mut midi_conn, connected_port_name, available_ports) = if let Some(existing) =
+            preconnected_midi
+        {
+            existing
+        } else {
+            let _ = progress_tx.send(ProgressUpdate::Log {
+                level: LogLevel::Info,
+                message: format!("Initializing MIDI output '{}'", config.midi_out),
+            });
+            connect_midi_output_by_name(&config.midi_out).with_context(|| {
+                format!("MIDI output initialization/connection failed for '{}'", config.midi_out)
+            })?
+        };
 
         let _ = progress_tx.send(ProgressUpdate::Log {
             level: LogLevel::Info,
-            message: format!("Connected to MIDI: {}", config.midi_out),
+            message: format!("Connected to MIDI: {}", connected_port_name),
+        });
+        let _ = progress_tx.send(ProgressUpdate::Log {
+            level: LogLevel::Info,
+            message: format!("MIDI ports at connect time: {}", available_ports.join(", ")),
         });
 
         // Setup audio capture

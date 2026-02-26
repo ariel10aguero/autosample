@@ -1,9 +1,12 @@
 // src/ui/devices.rs
 use crate::state::AppState;
+use autosample_core::EngineStatus;
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // NOTE: no ScrollArea here (sidebar owns scrolling)
+    let refresh_disabled =
+        state.engine_status == EngineStatus::Running || state.is_device_scan_running();
 
     ui.group(|ui| {
         ui.label(egui::RichText::new("MIDI Output").strong().size(16.0));
@@ -27,9 +30,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     }
                 });
 
-            let refresh = ui.add(egui::Button::new("🔄")).on_hover_text("Refresh MIDI devices");
+            let refresh = ui
+                .add_enabled(!refresh_disabled, egui::Button::new("🔄"))
+                .on_hover_text("Refresh MIDI and audio devices");
             if refresh.clicked() {
-                state.refresh_devices();
+                state.request_device_scan();
             }
         });
 
@@ -69,9 +74,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                     }
                 });
 
-            let refresh = ui.add(egui::Button::new("🔄")).on_hover_text("Refresh audio devices");
+            let refresh = ui
+                .add_enabled(!refresh_disabled, egui::Button::new("🔄"))
+                .on_hover_text("Refresh MIDI and audio devices");
             if refresh.clicked() {
-                state.refresh_devices();
+                state.request_device_scan();
             }
         });
 
@@ -84,6 +91,20 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     });
 
     ui.add_space(10.0);
+
+    if state.engine_status == EngineStatus::Running {
+        ui.label(
+            egui::RichText::new("Refresh unavailable while running")
+                .color(egui::Color32::GRAY),
+        );
+    } else if state.is_device_scan_running() {
+        ui.label(egui::RichText::new("Scanning devices...").color(egui::Color32::LIGHT_BLUE));
+    } else if let Some(error) = state.device_scan_error() {
+        ui.label(
+            egui::RichText::new(format!("Device refresh failed: {}", error))
+                .color(egui::Color32::YELLOW),
+        );
+    }
 
     ui.group(|ui| {
         ui.label(egui::RichText::new("Audio Settings").strong().size(16.0));
