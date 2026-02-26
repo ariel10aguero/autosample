@@ -38,7 +38,7 @@ impl AutosampleEngine {
         config: RunConfig,
         progress_tx: Sender<ProgressUpdate>,
     ) -> Result<SessionMetadata> {
-        self.run_internal(config, progress_tx, None)
+        self.run_internal(config, progress_tx, None, None)
     }
 
     pub fn run_with_connected_midi(
@@ -53,6 +53,24 @@ impl AutosampleEngine {
             config,
             progress_tx,
             Some((midi_conn, connected_port_name, available_ports)),
+            None,
+        )
+    }
+
+    pub fn run_with_connected_midi_and_cancel(
+        &mut self,
+        config: RunConfig,
+        progress_tx: Sender<ProgressUpdate>,
+        midi_conn: MidiOutputConnection,
+        connected_port_name: String,
+        available_ports: Vec<String>,
+        external_cancel: Arc<AtomicBool>,
+    ) -> Result<SessionMetadata> {
+        self.run_internal(
+            config,
+            progress_tx,
+            Some((midi_conn, connected_port_name, available_ports)),
+            Some(external_cancel),
         )
     }
 
@@ -61,8 +79,20 @@ impl AutosampleEngine {
         config: RunConfig,
         progress_tx: Sender<ProgressUpdate>,
         preconnected_midi: Option<(MidiOutputConnection, String, Vec<String>)>,
+        external_cancel: Option<Arc<AtomicBool>>,
     ) -> Result<SessionMetadata> {
         self.cancel_flag.store(false, Ordering::SeqCst);
+        if let Some(external) = &external_cancel {
+            external.store(false, Ordering::SeqCst);
+        }
+
+        let is_cancelled = || {
+            self.cancel_flag.load(Ordering::SeqCst)
+                || external_cancel
+                    .as_ref()
+                    .map(|flag| flag.load(Ordering::SeqCst))
+                    .unwrap_or(false)
+        };
 
         // Validate ffmpeg if needed
         let format = OutputFormat::from_str(&config.format)?;
@@ -160,7 +190,7 @@ impl AutosampleEngine {
 
         // Main sampling loop
         for (idx, job) in jobs.iter().enumerate() {
-            if self.cancel_flag.load(Ordering::SeqCst) {
+            if is_cancelled() {
                 let _ = progress_tx.send(ProgressUpdate::Cancelled);
                 break;
             }
@@ -197,6 +227,7 @@ impl AutosampleEngine {
                 &config,
                 sample_rate,
                 channels,
+                &is_cancelled,
             ) {
                 Ok(samples) => {
                     // Process the audio
@@ -237,6 +268,10 @@ impl AutosampleEngine {
                     }
                 }
                 Err(e) => {
+                    if is_cancelled() {
+                        let _ = progress_tx.send(ProgressUpdate::Cancelled);
+                        break;
+                    }
                     let _ = progress_tx.send(ProgressUpdate::SampleFailed {
                         index: idx + 1,
                         total: total_jobs,
@@ -288,6 +323,7 @@ fn capture_sample(
     config: &RunConfig,
     sample_rate: u32,
     channels: u16,
+    is_cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<f32>> {
     let preroll_samples =
         (sample_rate as usize * channels as usize * config.preroll_ms as usize) / 1000;
@@ -301,6 +337,9 @@ fn capture_sample(
 
     let preroll_start = std::time::Instant::now();
     while preroll_start.elapsed() < Duration::from_millis(config.preroll_ms as u64) {
+        if is_cancelled() {
+            anyhow::bail!("Capture cancelled");
+        }
         consume_audio_packets(receiver, ring);
         thread::sleep(Duration::from_millis(1));
     }
@@ -309,6 +348,11 @@ fn capture_sample(
 
     let hold_start = std::time::Instant::now();
     while hold_start.elapsed() < Duration::from_millis(config.hold_ms as u64) {
+        if is_cancelled() {
+            let _ = send_note_off(midi_conn, job.note);
+            let _ = send_all_notes_off(midi_conn);
+            anyhow::bail!("Capture cancelled");
+        }
         consume_audio_packets(receiver, ring);
         thread::sleep(Duration::from_millis(1));
     }
@@ -317,6 +361,10 @@ fn capture_sample(
 
     let tail_start = std::time::Instant::now();
     while tail_start.elapsed() < Duration::from_millis(config.tail_ms as u64) {
+        if is_cancelled() {
+            let _ = send_all_notes_off(midi_conn);
+            anyhow::bail!("Capture cancelled");
+        }
         consume_audio_packets(receiver, ring);
         thread::sleep(Duration::from_millis(1));
     }

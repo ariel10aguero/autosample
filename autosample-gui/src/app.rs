@@ -12,6 +12,7 @@ use std::time::Duration;
 pub struct AutosampleApp {
     pub state: AppState,
     engine_running: Arc<AtomicBool>,
+    engine_cancel: Option<Arc<AtomicBool>>,
     event_rx: Option<Receiver<autosample_core::ProgressUpdate>>,
 }
 
@@ -26,6 +27,7 @@ impl AutosampleApp {
         Self {
             state,
             engine_running: Arc::new(AtomicBool::new(false)),
+            engine_cancel: None,
             event_rx: None,
         }
     }
@@ -69,6 +71,8 @@ impl AutosampleApp {
         let (tx, rx) = unbounded();
         self.event_rx = Some(rx);
         self.engine_running.store(true, Ordering::SeqCst);
+        let engine_cancel = Arc::new(AtomicBool::new(false));
+        self.engine_cancel = Some(engine_cancel.clone());
 
         let config = self.state.config.clone();
         let running = self.engine_running.clone();
@@ -76,12 +80,13 @@ impl AutosampleApp {
 
         thread::spawn(move || {
             let mut engine = AutosampleEngine::new();
-            if let Err(e) = engine.run_with_connected_midi(
+            if let Err(e) = engine.run_with_connected_midi_and_cancel(
                 config,
                 tx,
                 midi_conn,
                 connected_port_name,
                 available_ports,
+                engine_cancel,
             ) {
                 let _ = tx_for_errors.send(ProgressUpdate::Log {
                     level: LogLevel::Error,
@@ -95,16 +100,74 @@ impl AutosampleApp {
         self.state.engine_status = EngineStatus::Running;
     }
 
+    fn send_all_notes_off_best_effort(&mut self, reason: &str) {
+        let midi_target = self.state.config.midi_out.trim().to_string();
+        if midi_target.is_empty() {
+            return;
+        }
+
+        self.state.add_log(
+            LogLevel::Info,
+            format!(
+                "Sending emergency All Notes Off for '{}' ({})",
+                midi_target, reason
+            ),
+        );
+
+        match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
+            Ok((mut conn, connected_port_name, _)) => {
+                if let Err(error) = autosample_core::midi::send_all_notes_off(&mut conn) {
+                    self.state.add_log(
+                        LogLevel::Warning,
+                        format!(
+                            "All Notes Off failed on '{}': {}",
+                            connected_port_name, error
+                        ),
+                    );
+                } else {
+                    self.state.add_log(
+                        LogLevel::Info,
+                        format!("All Notes Off sent to '{}'", connected_port_name),
+                    );
+                }
+            }
+            Err(error) => {
+                self.state.add_log(
+                    LogLevel::Warning,
+                    format!(
+                        "Could not open MIDI output '{}' for emergency All Notes Off: {:#}",
+                        midi_target, error
+                    ),
+                );
+            }
+        }
+    }
+
     pub fn stop_session(&mut self) {
-        self.engine_running.store(false, Ordering::SeqCst);
-        self.event_rx = None;
-        self.state.engine_status = EngineStatus::Idle;
+        self.send_all_notes_off_best_effort("stop button");
+        if let Some(cancel_flag) = &self.engine_cancel {
+            cancel_flag.store(true, Ordering::SeqCst);
+        }
+        self.state.add_log(
+            LogLevel::Info,
+            "Stop requested: cancelling active sampling loop.".to_string(),
+        );
+    }
+}
+
+impl Drop for AutosampleApp {
+    fn drop(&mut self) {
+        self.send_all_notes_off_best_effort("application shutdown");
     }
 }
 
 impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.state.poll_device_scan_result();
+
+        if !self.engine_running.load(Ordering::SeqCst) && self.engine_cancel.is_some() {
+            self.engine_cancel = None;
+        }
 
         // Process engine events
         if let Some(rx) = &self.event_rx {
@@ -175,6 +238,7 @@ impl eframe::App for AutosampleApp {
                     }
                     ui.separator();
                     if ui.button("Quit").clicked() {
+                        self.send_all_notes_off_best_effort("quit command");
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
