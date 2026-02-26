@@ -3,6 +3,16 @@ use crate::state::AppState;
 use autosample_core::EngineStatus;
 use eframe::egui;
 
+const DEVICE_LABEL_WIDTH: f32 = 56.0;
+const DEVICE_REFRESH_BUTTON_WIDTH: f32 = 28.0;
+const DEVICE_COMBO_MIN_WIDTH: f32 = 140.0;
+
+fn device_combo_width(ui: &egui::Ui) -> f32 {
+    let spacing = ui.spacing().item_spacing.x;
+    (ui.available_width() - DEVICE_LABEL_WIDTH - DEVICE_REFRESH_BUTTON_WIDTH - (spacing * 2.0))
+        .max(DEVICE_COMBO_MIN_WIDTH)
+}
+
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // NOTE: no ScrollArea here (sidebar owns scrolling)
     let refresh_disabled =
@@ -11,12 +21,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.group(|ui| {
         ui.label(egui::RichText::new("MIDI Output").strong().size(16.0));
         ui.add_space(6.0);
+        let combo_width = device_combo_width(ui);
 
         ui.horizontal(|ui| {
-            ui.label("Device:");
+            ui.add_sized([DEVICE_LABEL_WIDTH, 0.0], egui::Label::new("Device:"));
 
             egui::ComboBox::from_id_salt("midi_device_combo")
-                .width(ui.available_width() - 40.0)
+                .width(combo_width)
                 .selected_text(
                     state
                         .selected_midi_idx
@@ -31,7 +42,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 });
 
             let refresh = ui
-                .add_enabled(!refresh_disabled, egui::Button::new("🔄"))
+                .add_enabled(
+                    !refresh_disabled,
+                    egui::Button::new("🔄")
+                        .min_size(egui::vec2(DEVICE_REFRESH_BUTTON_WIDTH, 0.0)),
+                )
                 .on_hover_text("Refresh MIDI and audio devices");
             if refresh.clicked() {
                 state.request_device_scan();
@@ -51,12 +66,13 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.group(|ui| {
         ui.label(egui::RichText::new("Audio Input").strong().size(16.0));
         ui.add_space(6.0);
+        let combo_width = device_combo_width(ui);
 
         ui.horizontal(|ui| {
-            ui.label("Device:");
+            ui.add_sized([DEVICE_LABEL_WIDTH, 0.0], egui::Label::new("Device:"));
 
             egui::ComboBox::from_id_salt("audio_device_combo")
-                .width(ui.available_width() - 40.0)
+                .width(combo_width)
                 .selected_text(
                     state
                         .selected_audio_idx
@@ -75,7 +91,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 });
 
             let refresh = ui
-                .add_enabled(!refresh_disabled, egui::Button::new("🔄"))
+                .add_enabled(
+                    !refresh_disabled,
+                    egui::Button::new("🔄")
+                        .min_size(egui::vec2(DEVICE_REFRESH_BUTTON_WIDTH, 0.0)),
+                )
                 .on_hover_text("Refresh MIDI and audio devices");
             if refresh.clicked() {
                 state.request_device_scan();

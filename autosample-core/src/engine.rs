@@ -210,6 +210,7 @@ impl AutosampleEngine {
                 config.output_organization,
                 job,
                 "wav",
+                config.round_robin > 1,
             );
             if config.resume && wav_path.exists() {
                 let _ = progress_tx.send(ProgressUpdate::SampleSkipped {
@@ -415,6 +416,7 @@ fn export_sample(
         config.output_organization,
         job,
         "wav",
+        config.round_robin > 1,
     );
 
     if let Some(parent) = wav_path.parent() {
@@ -437,6 +439,7 @@ fn export_sample(
             config.output_organization,
             job,
             "mp3",
+            config.round_robin > 1,
         );
         let _ = convert_to_mp3(&wav_path, &mp3_path);
 
@@ -454,9 +457,10 @@ fn build_file_path(
     organization: OutputOrganization,
     job: &SampleJob,
     extension: &str,
+    include_round_robin_suffix: bool,
 ) -> PathBuf {
     let sample_dir = build_sample_dir(output_dir, organization, job);
-    let filename = build_sample_filename(prefix, job, extension);
+    let filename = build_sample_filename(prefix, job, extension, include_round_robin_suffix);
     sample_dir.join(filename)
 }
 
@@ -469,21 +473,29 @@ fn build_sample_dir(
     let note_dir = format!("{}_{:03}", note_name, job.note);
 
     match organization {
-        OutputOrganization::Flat => output_dir.join("samples"),
-        OutputOrganization::ByNote => output_dir.join("samples").join(note_dir),
-        OutputOrganization::ByNoteVelocity => output_dir
-            .join("samples")
-            .join(note_dir)
-            .join(format!("vel{:03}", job.velocity)),
+        OutputOrganization::Flat => output_dir.clone(),
+        OutputOrganization::ByNote => output_dir.join(note_dir),
     }
 }
 
-fn build_sample_filename(prefix: &str, job: &SampleJob, extension: &str) -> String {
+fn build_sample_filename(
+    prefix: &str,
+    job: &SampleJob,
+    extension: &str,
+    include_round_robin_suffix: bool,
+) -> String {
     let note_name = midi_note_to_name(job.note);
-    format!(
-        "{}_{}_{:03}_vel{:03}_rr{:02}.{}",
-        prefix, note_name, job.note, job.velocity, job.rr_index, extension
-    )
+    if include_round_robin_suffix {
+        format!(
+            "{}_{}_vel{:03}_rr{:02}.{}",
+            prefix, note_name, job.velocity, job.rr_index, extension
+        )
+    } else {
+        format!(
+            "{}_{}_vel{:03}.{}",
+            prefix, note_name, job.velocity, extension
+        )
+    }
 }
 
 fn midi_note_to_name(note: u8) -> String {

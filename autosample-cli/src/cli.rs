@@ -88,12 +88,12 @@ pub struct RunConfigArgs {
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub resume: bool,
 
-    /// Output directory organization (flat, by-note, by-note-velocity)
+    /// Output directory organization (flat, by-note)
     #[arg(
         long = "output-organization",
         value_name = "MODE",
         default_value = "flat",
-        value_parser = ["flat", "by-note", "by-note-velocity"]
+        value_parser = ["flat", "by-note"]
     )]
     pub output_organization: String,
 }

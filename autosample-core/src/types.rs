@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 pub enum OutputOrganization {
     #[default]
     Flat,
+    #[serde(alias = "by_note_velocity")]
     ByNote,
-    ByNoteVelocity,
 }
 
 impl OutputOrganization {
@@ -14,11 +14,9 @@ impl OutputOrganization {
         match s.to_lowercase().as_str() {
             "flat" => Ok(OutputOrganization::Flat),
             "by_note" | "by-note" | "bynote" => Ok(OutputOrganization::ByNote),
-            "by_note_velocity" | "by-note-velocity" | "bynotevelocity" => {
-                Ok(OutputOrganization::ByNoteVelocity)
-            }
+            "by_note_velocity" | "by-note-velocity" | "bynotevelocity" => Ok(OutputOrganization::ByNote),
             _ => anyhow::bail!(
-                "Invalid output organization: {}. Use flat, by-note, or by-note-velocity",
+                "Invalid output organization: {}. Use flat or by-note",
                 s
             ),
         }

@@ -72,16 +72,17 @@ pub enum DeviceScanState {
 
 impl Default for AppState {
     fn default() -> Self {
+        let config = RunConfig::default();
         Self {
             midi_devices: Vec::new(),
             audio_devices: Vec::new(),
             selected_midi_idx: None,
             selected_audio_idx: None,
-            config: RunConfig::default(),
+            preset_name: config.prefix.clone(),
+            config,
             engine_status: EngineStatus::Idle,
             progress: ProgressState::default(),
             logs: Vec::new(),
-            preset_name: String::new(),
             device_scan_state: DeviceScanState::Idle,
             last_scan_completed_at: None,
             device_scan_rx: None,
@@ -362,11 +363,7 @@ impl AppState {
             .iter()
             .position(|d| d.name == self.config.audio_in);
 
-        self.preset_name = std::path::Path::new(path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
+        self.preset_name = self.config.prefix.clone();
 
         Ok(())
     }
@@ -380,5 +377,6 @@ impl AppState {
         self.progress = ProgressState::default();
         self.engine_status = EngineStatus::Idle;
         self.preset_name.clear();
+        self.config.prefix.clear();
     }
 }

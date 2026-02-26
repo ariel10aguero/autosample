@@ -79,10 +79,16 @@ pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
             }
         });
 
-        ui.horizontal(|ui| {
-            ui.label("Prefix:");
-            ui.text_edit_singleline(&mut state.config.prefix);
-        });
+        let name_preview = if state.preset_name.trim().is_empty() {
+            "Untitled"
+        } else {
+            state.preset_name.as_str()
+        };
+        ui.label(
+            egui::RichText::new(format!("File name prefix: {}", name_preview))
+                .weak()
+                .monospace(),
+        );
 
         ui.label("Organization:");
         ui.horizontal(|ui| {
@@ -96,19 +102,11 @@ pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
                 OutputOrganization::ByNote,
                 "By Note",
             );
-            ui.radio_value(
-                &mut state.config.output_organization,
-                OutputOrganization::ByNoteVelocity,
-                "By Note + Velocity",
-            );
         });
 
         let path_preview = match state.config.output_organization {
-            OutputOrganization::Flat => "output/prefix/samples/<file>.wav",
-            OutputOrganization::ByNote => "output/prefix/samples/<NoteName_Midi>/<file>.wav",
-            OutputOrganization::ByNoteVelocity => {
-                "output/prefix/samples/<NoteName_Midi>/velXXX/<file>.wav"
-            }
+            OutputOrganization::Flat => "output/<preset_name>/<file>.wav",
+            OutputOrganization::ByNote => "output/<preset_name>/<NoteName_Midi>/<file>.wav",
         };
         ui.label(egui::RichText::new(path_preview).weak().monospace());
 

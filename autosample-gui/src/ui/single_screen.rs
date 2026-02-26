@@ -4,6 +4,8 @@ use crate::ui;
 use crate::ui::progress::RunCommand;
 use autosample_core::parse::{parse_notes, parse_velocities};
 use eframe::egui;
+use std::path::PathBuf;
+use std::process::Command;
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
     let mut cmd = None;
@@ -25,7 +27,11 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
                     ui.label("Preset:");
-                    ui.add(egui::TextEdit::singleline(&mut state.preset_name).hint_text("Untitled"));
+                    let response =
+                        ui.add(egui::TextEdit::singleline(&mut state.preset_name).hint_text("Untitled"));
+                    if response.changed() {
+                        state.config.prefix = state.preset_name.clone();
+                    }
                 });
 
                 ui.add_space(8.0);
@@ -180,6 +186,25 @@ fn show_run_with_start_gate(
                 if start_btn.clicked() {
                     cmd = Some(RunCommand::Start);
                 }
+
+                if state.engine_status == EngineStatus::Completed {
+                    let open_btn = ui
+                        .button("📂 Open Samples Folder")
+                        .on_hover_text("Open output directory");
+                    if open_btn.clicked() {
+                        let output_dir = samples_output_dir(state);
+                        if let Err(err) = open_directory(&output_dir) {
+                            state.add_log(
+                                LogLevel::Warning,
+                                format!(
+                                    "Could not open output directory '{}': {}",
+                                    output_dir.display(),
+                                    err
+                                ),
+                            );
+                        }
+                    }
+                }
             } else if state.engine_status == EngineStatus::Running {
                 if ui.button("⏹ Stop").clicked() {
                     cmd = Some(RunCommand::Stop);
@@ -284,4 +309,46 @@ fn show_run_with_start_gate(
     );
 
     cmd
+}
+
+fn samples_output_dir(state: &AppState) -> PathBuf {
+    let output = PathBuf::from(state.config.output.trim());
+    let prefix = state.config.prefix.trim();
+    if prefix.is_empty() {
+        output
+    } else {
+        output.join(prefix)
+    }
+}
+
+fn open_directory(path: &PathBuf) -> Result<(), String> {
+    if !path.exists() {
+        return Err("Directory does not exist yet".to_string());
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = Command::new("open");
+        cmd.arg(path);
+        cmd
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = Command::new("explorer");
+        cmd.arg(path);
+        cmd
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut command = {
+        let mut cmd = Command::new("xdg-open");
+        cmd.arg(path);
+        cmd
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("Failed to launch file browser: {}", e))
 }

@@ -119,22 +119,32 @@ pub fn parse_velocities(input: &str) -> Result<Vec<u8>> {
 
 fn note_name_to_midi(name: &str) -> Result<u8> {
     let name = name.trim().to_uppercase();
+    if name.is_empty() {
+        anyhow::bail!("Invalid note name: empty input");
+    }
 
-    // Parse note name and octave
-    let note_part = if name.len() >= 2
-        && (name.chars().nth(1) == Some('#') || name.chars().nth(1) == Some('S'))
-    {
-        &name[..2]
-    } else {
-        &name[..1]
-    };
+    // Parse note name and octave without byte indexing so malformed input
+    // cannot panic during intermediate UI validation.
+    let mut chars = name.chars();
+    let first = chars
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Invalid note name: empty input"))?;
+    let second = chars.next();
 
-    let octave_part = &name[note_part.len()..];
+    let mut note_part = first.to_string();
+    let mut octave_start = first.len_utf8();
+    if matches!(second, Some('#' | 'S' | 'B')) {
+        let accidental = second.unwrap_or_default();
+        note_part.push(accidental);
+        octave_start += accidental.len_utf8();
+    }
+
+    let octave_part = &name[octave_start..];
     let octave: i32 = octave_part
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid octave in note: {}", name))?;
 
-    let pitch = match note_part {
+    let pitch = match note_part.as_str() {
         "C" => 0,
         "C#" | "CS" | "DB" => 1,
         "D" => 2,
@@ -185,6 +195,12 @@ mod tests {
     fn test_parse_note_list() {
         let notes = parse_notes("C4,E4,G4").unwrap();
         assert_eq!(notes, vec![60, 64, 67]);
+    }
+
+    #[test]
+    fn test_parse_note_empty_token_fails() {
+        assert!(parse_notes("C4,,E4").is_err());
+        assert!(parse_notes("C4..").is_err());
     }
 
     #[test]
