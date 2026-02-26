@@ -1,5 +1,30 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputOrganization {
+    #[default]
+    Flat,
+    ByNote,
+    ByNoteVelocity,
+}
+
+impl OutputOrganization {
+    pub fn from_str(s: &str) -> anyhow::Result<Self> {
+        match s.to_lowercase().as_str() {
+            "flat" => Ok(OutputOrganization::Flat),
+            "by_note" | "by-note" | "bynote" => Ok(OutputOrganization::ByNote),
+            "by_note_velocity" | "by-note-velocity" | "bynotevelocity" => {
+                Ok(OutputOrganization::ByNoteVelocity)
+            }
+            _ => anyhow::bail!(
+                "Invalid output organization: {}. Use flat, by-note, or by-note-velocity",
+                s
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunConfig {
     pub midi_out: String,
@@ -18,6 +43,8 @@ pub struct RunConfig {
     pub normalize: Option<String>,
     pub round_robin: u32,
     pub resume: bool,
+    #[serde(default)]
+    pub output_organization: OutputOrganization,
 }
 
 impl Default for RunConfig {
@@ -39,6 +66,7 @@ impl Default for RunConfig {
             normalize: Some("peak".to_string()),
             round_robin: 1,
             resume: false,
+            output_organization: OutputOrganization::Flat,
         }
     }
 }

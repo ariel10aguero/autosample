@@ -204,7 +204,13 @@ impl AutosampleEngine {
             });
 
             // Check if file exists and resume mode is enabled
-            let wav_path = build_file_path(&output_dir, &config.prefix, job, "wav");
+            let wav_path = build_file_path(
+                &output_dir,
+                &config.prefix,
+                config.output_organization,
+                job,
+                "wav",
+            );
             if config.resume && wav_path.exists() {
                 let _ = progress_tx.send(ProgressUpdate::SampleSkipped {
                     index: idx + 1,
@@ -403,7 +409,13 @@ fn export_sample(
     needs_mp3: bool,
     format: OutputFormat,
 ) -> Result<()> {
-    let wav_path = build_file_path(output_dir, &config.prefix, job, "wav");
+    let wav_path = build_file_path(
+        output_dir,
+        &config.prefix,
+        config.output_organization,
+        job,
+        "wav",
+    );
 
     if let Some(parent) = wav_path.parent() {
         fs::create_dir_all(parent)?;
@@ -419,7 +431,13 @@ fn export_sample(
     write_wav(&wav_path, samples, spec)?;
 
     if needs_mp3 {
-        let mp3_path = build_file_path(output_dir, &config.prefix, job, "mp3");
+        let mp3_path = build_file_path(
+            output_dir,
+            &config.prefix,
+            config.output_organization,
+            job,
+            "mp3",
+        );
         let _ = convert_to_mp3(&wav_path, &mp3_path);
 
         if format == OutputFormat::Mp3 {
@@ -433,15 +451,39 @@ fn export_sample(
 fn build_file_path(
     output_dir: &PathBuf,
     prefix: &str,
+    organization: OutputOrganization,
     job: &SampleJob,
     extension: &str,
 ) -> PathBuf {
+    let sample_dir = build_sample_dir(output_dir, organization, job);
+    let filename = build_sample_filename(prefix, job, extension);
+    sample_dir.join(filename)
+}
+
+fn build_sample_dir(
+    output_dir: &PathBuf,
+    organization: OutputOrganization,
+    job: &SampleJob,
+) -> PathBuf {
     let note_name = midi_note_to_name(job.note);
-    let filename = format!(
+    let note_dir = format!("{}_{:03}", note_name, job.note);
+
+    match organization {
+        OutputOrganization::Flat => output_dir.join("samples"),
+        OutputOrganization::ByNote => output_dir.join("samples").join(note_dir),
+        OutputOrganization::ByNoteVelocity => output_dir
+            .join("samples")
+            .join(note_dir)
+            .join(format!("vel{:03}", job.velocity)),
+    }
+}
+
+fn build_sample_filename(prefix: &str, job: &SampleJob, extension: &str) -> String {
+    let note_name = midi_note_to_name(job.note);
+    format!(
         "{}_{}_{:03}_vel{:03}_rr{:02}.{}",
         prefix, note_name, job.note, job.velocity, job.rr_index, extension
-    );
-    output_dir.join("samples").join(filename)
+    )
 }
 
 fn midi_note_to_name(note: u8) -> String {

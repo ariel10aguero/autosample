@@ -11,6 +11,14 @@ pub fn parse_notes(input: &str) -> Result<Vec<u8>> {
         }
         let start = note_name_to_midi(parts[0])?;
         let end = note_name_to_midi(parts[1])?;
+        if start > end {
+            anyhow::bail!(
+                "Invalid note range '{}': descending ranges are not supported (start {} > end {})",
+                input,
+                start,
+                end
+            );
+        }
         return Ok((start..=end).collect());
     }
 
@@ -45,6 +53,9 @@ pub fn parse_velocities(input: &str) -> Result<Vec<u8>> {
         }
         let end: u8 = rest[0].parse()?;
         let step: u8 = rest[1].parse()?;
+        if step == 0 {
+            anyhow::bail!("Invalid velocity range format: step must be greater than zero");
+        }
 
         let mut velocities = Vec::new();
         if start > end {
@@ -82,6 +93,12 @@ pub fn parse_velocities(input: &str) -> Result<Vec<u8>> {
         }
         let start: u8 = parts[0].parse()?;
         let end: u8 = parts[1].parse()?;
+        if start > end {
+            anyhow::bail!(
+                "Invalid velocity range '{}': descending range requires a step (example: 127..1:8)",
+                input
+            );
+        }
         return Ok((start..=end).collect());
     }
 
@@ -159,6 +176,12 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_note_range_descending_fails() {
+        let err = parse_notes("E4..C4").unwrap_err();
+        assert!(err.to_string().contains("descending ranges are not supported"));
+    }
+
+    #[test]
     fn test_parse_note_list() {
         let notes = parse_notes("C4,E4,G4").unwrap();
         assert_eq!(notes, vec![60, 64, 67]);
@@ -176,5 +199,17 @@ mod tests {
     fn test_parse_velocities_list() {
         let vels = parse_velocities("127,100,64").unwrap();
         assert_eq!(vels, vec![127, 100, 64]);
+    }
+
+    #[test]
+    fn test_parse_velocity_range_descending_without_step_fails() {
+        let err = parse_velocities("127..64").unwrap_err();
+        assert!(err.to_string().contains("descending range requires a step"));
+    }
+
+    #[test]
+    fn test_parse_velocity_range_step_zero_fails() {
+        let err = parse_velocities("127..1:0").unwrap_err();
+        assert!(err.to_string().contains("step must be greater than zero"));
     }
 }

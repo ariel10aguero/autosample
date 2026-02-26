@@ -1,5 +1,6 @@
 // src/ui/session.rs
 use crate::state::AppState;
+use autosample_core::OutputOrganization;
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
@@ -82,6 +83,34 @@ pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
             ui.label("Prefix:");
             ui.text_edit_singleline(&mut state.config.prefix);
         });
+
+        ui.label("Organization:");
+        ui.horizontal(|ui| {
+            ui.radio_value(
+                &mut state.config.output_organization,
+                OutputOrganization::Flat,
+                "Flat",
+            );
+            ui.radio_value(
+                &mut state.config.output_organization,
+                OutputOrganization::ByNote,
+                "By Note",
+            );
+            ui.radio_value(
+                &mut state.config.output_organization,
+                OutputOrganization::ByNoteVelocity,
+                "By Note + Velocity",
+            );
+        });
+
+        let path_preview = match state.config.output_organization {
+            OutputOrganization::Flat => "output/prefix/samples/<file>.wav",
+            OutputOrganization::ByNote => "output/prefix/samples/<NoteName_Midi>/<file>.wav",
+            OutputOrganization::ByNoteVelocity => {
+                "output/prefix/samples/<NoteName_Midi>/velXXX/<file>.wav"
+            }
+        };
+        ui.label(egui::RichText::new(path_preview).weak().monospace());
 
         ui.horizontal(|ui| {
             ui.label("Format:");

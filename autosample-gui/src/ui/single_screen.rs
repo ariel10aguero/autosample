@@ -2,6 +2,7 @@
 use crate::state::AppState;
 use crate::ui;
 use crate::ui::progress::RunCommand;
+use autosample_core::parse::{parse_notes, parse_velocities};
 use eframe::egui;
 
 pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
@@ -113,26 +114,36 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
     cmd
 }
 
-fn readiness_check(state: &AppState) -> (bool, Vec<&'static str>) {
+fn readiness_check(state: &AppState) -> (bool, Vec<String>) {
     let mut missing = Vec::new();
 
     if state.config.midi_out.trim().is_empty() {
-        missing.push("Select a MIDI output device");
+        missing.push("Select a MIDI output device".to_string());
     }
     if state.config.audio_in.trim().is_empty() {
-        missing.push("Select an audio input device");
+        missing.push("Select an audio input device".to_string());
     }
     if state.config.output.trim().is_empty() {
-        missing.push("Choose an output directory");
+        missing.push("Choose an output directory".to_string());
     }
     if state.config.notes.trim().is_empty() {
-        missing.push("Enter a note range/list");
+        missing.push("Enter a note range/list".to_string());
+    } else if parse_notes(&state.config.notes)
+        .map(|notes| notes.is_empty())
+        .unwrap_or(true)
+    {
+        missing.push("Enter a valid note range/list (for example: C2..C6 or C4,E4,G4)".to_string());
     }
     if state.config.vel.trim().is_empty() {
-        missing.push("Enter velocity layers");
+        missing.push("Enter velocity layers".to_string());
+    } else if parse_velocities(&state.config.vel)
+        .map(|vel| vel.is_empty())
+        .unwrap_or(true)
+    {
+        missing.push("Enter valid velocity layers (for example: 127,100,64)".to_string());
     }
     if state.is_device_scan_running() {
-        missing.push("Wait for device refresh to complete");
+        missing.push("Wait for device refresh to complete".to_string());
     }
 
     (missing.is_empty(), missing)

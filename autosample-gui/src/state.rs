@@ -2,8 +2,13 @@ use autosample_core::{
     AudioDeviceInfo, EngineStatus, LogLevel, MidiPortInfo, ProgressUpdate, RunConfig,
 };
 use crossbeam_channel::{Receiver, TryRecvError};
+use std::time::Instant;
 
 use crate::device_scan::{self, DeviceScanResult};
+
+// ---------------------------------------------------------------------------
+// Public state types
+// ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct AppState {
@@ -26,6 +31,11 @@ pub struct AppState {
 
     // Device scan state
     pub device_scan_state: DeviceScanState,
+
+    // Tracks when the last scan finished so start_session() can enforce a
+    // CoreMIDI settle delay without blocking the UI thread.
+    pub last_scan_completed_at: Option<Instant>,
+
     device_scan_rx: Option<Receiver<device_scan::DeviceScanOutcome>>,
     pending_midi_scan_error: Option<String>,
 }
@@ -56,6 +66,10 @@ pub enum DeviceScanState {
     Failed(String),
 }
 
+// ---------------------------------------------------------------------------
+// Default
+// ---------------------------------------------------------------------------
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -69,13 +83,22 @@ impl Default for AppState {
             logs: Vec::new(),
             preset_name: String::new(),
             device_scan_state: DeviceScanState::Idle,
+            last_scan_completed_at: None,
             device_scan_rx: None,
             pending_midi_scan_error: None,
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// AppState impl
+// ---------------------------------------------------------------------------
+
 impl AppState {
+    // -----------------------------------------------------------------------
+    // Device scanning
+    // -----------------------------------------------------------------------
+
     pub fn request_device_scan(&mut self) {
         if self.engine_status == EngineStatus::Running {
             self.add_log(
@@ -95,7 +118,9 @@ impl AppState {
         let preferred_midi = self.config.midi_out.trim().to_string();
         self.pending_midi_scan_error = None;
 
-        // Run MIDI scan on the app thread to avoid backend init issues in short-lived worker threads.
+        // MIDI scan on the app thread using the port cache in midi.rs.
+        // The warmup client (created in App::new) keeps the CoreMIDI session
+        // live, so this call is unlikely to fail.
         match autosample_core::midi::get_midi_ports() {
             Ok(midi_devices) => {
                 self.apply_midi_scan_result(midi_devices, &preferred_midi);
@@ -107,14 +132,16 @@ impl AppState {
             }
         }
 
+        // Audio scan runs in a background thread (unchanged).
         self.device_scan_state = DeviceScanState::Scanning;
         self.device_scan_rx = Some(device_scan::spawn_device_scan());
         self.add_log(
             LogLevel::Info,
-            "Refreshing device list (MIDI now, audio in background)...".to_string(),
+            "Refreshing device list (MIDI cached, audio in background)…".to_string(),
         );
     }
 
+    /// Call this every frame from `eframe::App::update`.
     pub fn poll_device_scan_result(&mut self) {
         let Some(rx) = self.device_scan_rx.clone() else {
             return;
@@ -123,11 +150,13 @@ impl AppState {
         match rx.try_recv() {
             Ok(outcome) => {
                 self.device_scan_rx = None;
+                self.last_scan_completed_at = Some(Instant::now());
+
                 match outcome {
                     Ok(result) => {
                         self.apply_audio_scan_result(result);
-                        let midi_error = self.pending_midi_scan_error.take();
-                        if let Some(error) = midi_error {
+
+                        if let Some(error) = self.pending_midi_scan_error.take() {
                             self.device_scan_state = DeviceScanState::Failed(error.clone());
                             self.add_log(
                                 LogLevel::Warning,
@@ -141,7 +170,7 @@ impl AppState {
                             self.add_log(
                                 LogLevel::Info,
                                 format!(
-                                    "Device refresh complete: {} MIDI, {} audio",
+                                    "Device refresh complete: {} MIDI, {} audio.",
                                     self.midi_devices.len(),
                                     self.audio_devices.len()
                                 ),
@@ -149,27 +178,31 @@ impl AppState {
                         }
                     }
                     Err(error) => {
-                        let combined_error = if let Some(midi_error) =
+                        let combined = if let Some(midi_err) =
                             self.pending_midi_scan_error.take()
                         {
-                            format!("{}; {}", midi_error, error)
+                            format!("{}; {}", midi_err, error)
                         } else {
                             error
                         };
-                        self.device_scan_state = DeviceScanState::Failed(combined_error.clone());
+                        self.device_scan_state = DeviceScanState::Failed(combined.clone());
                         self.add_log(
                             LogLevel::Warning,
-                            format!("Device refresh failed: {}", combined_error),
+                            format!("Device refresh failed: {}", combined),
                         );
                     }
                 }
             }
+
             Err(TryRecvError::Empty) => {}
+
             Err(TryRecvError::Disconnected) => {
                 self.device_scan_rx = None;
+                self.last_scan_completed_at = Some(Instant::now());
+
                 let mut error = "Device refresh worker disconnected".to_string();
-                if let Some(midi_error) = self.pending_midi_scan_error.take() {
-                    error = format!("{}; {}", midi_error, error);
+                if let Some(midi_err) = self.pending_midi_scan_error.take() {
+                    error = format!("{}; {}", midi_err, error);
                 }
                 self.device_scan_state = DeviceScanState::Failed(error.clone());
                 self.add_log(
@@ -186,10 +219,14 @@ impl AppState {
 
     pub fn device_scan_error(&self) -> Option<&str> {
         match &self.device_scan_state {
-            DeviceScanState::Failed(message) => Some(message.as_str()),
+            DeviceScanState::Failed(msg) => Some(msg.as_str()),
             _ => None,
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Internal scan helpers
+    // -----------------------------------------------------------------------
 
     fn apply_audio_scan_result(&mut self, result: DeviceScanResult) {
         let preferred_audio = self.config.audio_in.trim().to_string();
@@ -198,7 +235,7 @@ impl AppState {
         self.selected_audio_idx = Self::resolve_selection_index(
             &preferred_audio,
             &self.audio_devices,
-            |device| device.name.as_str(),
+            |d| d.name.as_str(),
         );
 
         if let Some(idx) = self.selected_audio_idx {
@@ -215,7 +252,7 @@ impl AppState {
         self.selected_midi_idx = Self::resolve_selection_index(
             preferred_midi,
             &self.midi_devices,
-            |device| device.name.as_str(),
+            |d| d.name.as_str(),
         );
 
         if let Some(idx) = self.selected_midi_idx {
@@ -234,16 +271,18 @@ impl AppState {
         if devices.is_empty() {
             return None;
         }
-
         if preferred.is_empty() {
             return Some(0);
         }
-
         devices
             .iter()
-            .position(|device| get_name(device) == preferred)
+            .position(|d| get_name(d) == preferred)
             .or(Some(0))
     }
+
+    // -----------------------------------------------------------------------
+    // Logging
+    // -----------------------------------------------------------------------
 
     pub fn add_log(&mut self, level: LogLevel, message: String) {
         self.logs.push(LogEntry {
@@ -252,6 +291,10 @@ impl AppState {
             message,
         });
     }
+
+    // -----------------------------------------------------------------------
+    // Engine events
+    // -----------------------------------------------------------------------
 
     pub fn handle_engine_event(&mut self, event: ProgressUpdate) {
         match event {
@@ -296,6 +339,10 @@ impl AppState {
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Preset I/O
+    // -----------------------------------------------------------------------
+
     pub fn save_preset(&self, path: &str) -> anyhow::Result<()> {
         let json = serde_json::to_string_pretty(&self.config)?;
         std::fs::write(path, json)?;
@@ -323,6 +370,10 @@ impl AppState {
 
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Project reset
+    // -----------------------------------------------------------------------
 
     pub fn clear_project(&mut self) {
         self.logs.clear();

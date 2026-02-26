@@ -1,21 +1,34 @@
-// src/app.rs
 use crate::state::AppState;
 use crate::ui;
 use autosample_core::{AutosampleEngine, EngineStatus, LogLevel, ProgressUpdate};
+use autosample_core::midi::ensure_midi_warmup;
+use autosample_core::parse::{parse_notes, parse_velocities};
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
+use midir::MidiOutputConnection;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+// How long after a Stop we refuse to allow a new Start.  Gives CoreMIDI time
+// to fully release the previous connection before we open a new one.
+const POST_STOP_SETTLE_MS: u64 = 2000;
+
 pub struct AutosampleApp {
     pub state: AppState,
+
     engine_running: Arc<AtomicBool>,
     engine_cancel: Option<Arc<AtomicBool>>,
+
+    /// Active MIDI connection that is being used (or was last used) by the
+    /// engine.  Keeping it here means we can send All-Notes-Off through the
+    /// *same* connection without opening a new CoreMIDI client.
+    active_midi_conn: Option<MidiOutputConnection>,
+
     stop_requested: bool,
     restart_blocked_until: Option<Instant>,
-    event_rx: Option<Receiver<autosample_core::ProgressUpdate>>,
+    event_rx: Option<Receiver<ProgressUpdate>>,
 }
 
 impl AutosampleApp {
@@ -23,27 +36,39 @@ impl AutosampleApp {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        // Pre-warm the CoreMIDI session as early as possible so the daemon
+        // has time to fully initialize before the user clicks Start.
+        ensure_midi_warmup();
+
         let mut state = AppState::default();
+        // Scan happens after warmup so get_midi_ports() hits a live session.
         state.request_device_scan();
 
         Self {
             state,
             engine_running: Arc::new(AtomicBool::new(false)),
             engine_cancel: None,
+            active_midi_conn: None,
             stop_requested: false,
             restart_blocked_until: None,
             event_rx: None,
         }
     }
 
+    // -----------------------------------------------------------------------
+    // Session control
+    // -----------------------------------------------------------------------
+
     pub fn start_session(&mut self) {
+        // --- guards --------------------------------------------------------
         if self.engine_running.load(Ordering::SeqCst) {
-            return; // Already running
+            return;
         }
         if self.state.is_device_scan_running() {
             self.state.add_log(
                 LogLevel::Warning,
-                "Start blocked: device refresh is still running. Wait until scanning completes."
+                "Start blocked: device refresh is still running. \
+                 Wait until scanning completes."
                     .to_string(),
             );
             return;
@@ -51,39 +76,86 @@ impl AutosampleApp {
         if self.stop_requested {
             self.state.add_log(
                 LogLevel::Warning,
-                "Start blocked: stop is still in progress. Wait until teardown completes."
+                "Start blocked: stop is still in progress. \
+                 Wait until teardown completes."
                     .to_string(),
             );
             return;
         }
         if let Some(blocked_until) = self.restart_blocked_until {
             if Instant::now() < blocked_until {
+                let remaining = blocked_until.duration_since(Instant::now());
                 self.state.add_log(
                     LogLevel::Warning,
-                    "Start blocked: waiting briefly for MIDI backend to settle after Stop."
-                        .to_string(),
+                    format!(
+                        "Start blocked: waiting {:.1}s for MIDI backend to settle after Stop.",
+                        remaining.as_secs_f32()
+                    ),
                 );
                 return;
             }
             self.restart_blocked_until = None;
         }
 
-        let midi_target = self.state.config.midi_out.clone();
+        // Validate note/velocity expressions before touching MIDI backend.
+        let notes = match parse_notes(&self.state.config.notes) {
+            Ok(notes) if !notes.is_empty() => notes,
+            Ok(_) => {
+                self.state.add_log(
+                    LogLevel::Error,
+                    "Start failed: note selection resolved to zero notes.".to_string(),
+                );
+                return;
+            }
+            Err(error) => {
+                self.state.add_log(
+                    LogLevel::Error,
+                    format!("Start failed: invalid note range/list: {}", error),
+                );
+                return;
+            }
+        };
+        let velocities = match parse_velocities(&self.state.config.vel) {
+            Ok(velocities) if !velocities.is_empty() => velocities,
+            Ok(_) => {
+                self.state.add_log(
+                    LogLevel::Error,
+                    "Start failed: velocity selection resolved to zero layers.".to_string(),
+                );
+                return;
+            }
+            Err(error) => {
+                self.state.add_log(
+                    LogLevel::Error,
+                    format!("Start failed: invalid velocity layers: {}", error),
+                );
+                return;
+            }
+        };
         self.state.add_log(
             LogLevel::Info,
             format!(
-                "Preparing MIDI connection on app thread for '{}'",
-                midi_target
+                "Validated session input: {} note(s), {} velocity layer(s).",
+                notes.len(),
+                velocities.len()
             ),
         );
+
+        // --- MIDI connection -----------------------------------------------
+        let midi_target = self.state.config.midi_out.clone();
+        self.state.add_log(
+            LogLevel::Info,
+            format!("Opening MIDI connection for '{}'…", midi_target),
+        );
+
         let (midi_conn, connected_port_name, available_ports) =
             match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
-                Ok(connection) => connection,
+                Ok(triple) => triple,
                 Err(error) => {
                     self.state.add_log(
                         LogLevel::Error,
                         format!(
-                            "Start failed before engine launch:\nMIDI output initialization/connection failed for '{}': {:#}",
+                            "Start failed: MIDI init/connection failed for '{}':\n{:#}",
                             midi_target, error
                         ),
                     );
@@ -91,12 +163,21 @@ impl AutosampleApp {
                 }
             };
 
+        self.state.add_log(
+            LogLevel::Info,
+            format!("MIDI connected: {}", connected_port_name),
+        );
+
+        // --- launch engine thread ------------------------------------------
         let (tx, rx) = unbounded();
         self.event_rx = Some(rx);
         self.engine_running.store(true, Ordering::SeqCst);
+
         let engine_cancel = Arc::new(AtomicBool::new(false));
         self.engine_cancel = Some(engine_cancel.clone());
 
+        // We hand the connection to the engine thread.  It will be returned
+        // (or dropped) when the thread finishes.
         let config = self.state.config.clone();
         let running = self.engine_running.clone();
         let tx_for_errors = tx.clone();
@@ -123,7 +204,47 @@ impl AutosampleApp {
         self.state.engine_status = EngineStatus::Running;
     }
 
+    pub fn stop_session(&mut self) {
+        // Signal the engine to cancel; it will send All-Notes-Off itself
+        // before returning, so we do NOT open a second MIDI connection here.
+        if let Some(cancel_flag) = &self.engine_cancel {
+            cancel_flag.store(true, Ordering::SeqCst);
+        }
+
+        self.stop_requested = true;
+
+        // Give CoreMIDI time to settle before the user can click Start again.
+        self.restart_blocked_until =
+            Some(Instant::now() + Duration::from_millis(POST_STOP_SETTLE_MS));
+
+        self.state.add_log(
+            LogLevel::Info,
+            "Stop requested: cancelling active sampling loop.".to_string(),
+        );
+
+        // If the engine wasn't running there is nothing to wait for.
+        if !self.engine_running.load(Ordering::SeqCst) {
+            self.stop_requested = false;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Emergency All-Notes-Off
+    //
+    // Only opens a new MIDI connection when we have no other choice (i.e. on
+    // Drop / Quit when the engine is not running).  If the engine is still
+    // live the cancel flag is sufficient — the engine sends note-off itself.
+    // -----------------------------------------------------------------------
+
     fn send_all_notes_off_best_effort(&mut self, reason: &str) {
+        // If the engine is still running, cancelling it is enough.
+        if self.engine_running.load(Ordering::SeqCst) {
+            if let Some(flag) = &self.engine_cancel {
+                flag.store(true, Ordering::SeqCst);
+            }
+            return;
+        }
+
         let midi_target = self.state.config.midi_out.trim().to_string();
         if midi_target.is_empty() {
             return;
@@ -132,57 +253,66 @@ impl AutosampleApp {
         self.state.add_log(
             LogLevel::Info,
             format!(
-                "Sending emergency All Notes Off for '{}' ({})",
+                "Sending All Notes Off for '{}' ({})",
                 midi_target, reason
             ),
         );
 
-        match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
-            Ok((mut conn, connected_port_name, _)) => {
-                if let Err(error) = autosample_core::midi::send_all_notes_off(&mut conn) {
+        // Re-use active connection when available to avoid a fresh CoreMIDI
+        // client init cycle.
+        if let Some(conn) = self.active_midi_conn.as_mut() {
+            match autosample_core::midi::send_all_notes_off(conn) {
+                Ok(_) => {
+                    self.state.add_log(
+                        LogLevel::Info,
+                        format!("All Notes Off sent via active connection ({})", reason),
+                    );
+                    return;
+                }
+                Err(err) => {
                     self.state.add_log(
                         LogLevel::Warning,
-                        format!(
-                            "All Notes Off failed on '{}': {}",
-                            connected_port_name, error
-                        ),
+                        format!("All Notes Off via active connection failed: {}", err),
+                    );
+                    // Fall through to open a fresh connection below.
+                }
+            }
+        }
+
+        // Last resort: open a brand-new connection.
+        match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
+            Ok((mut conn, port_name, _)) => {
+                if let Err(err) = autosample_core::midi::send_all_notes_off(&mut conn) {
+                    self.state.add_log(
+                        LogLevel::Warning,
+                        format!("All Notes Off failed on '{}': {}", port_name, err),
                     );
                 } else {
                     self.state.add_log(
                         LogLevel::Info,
-                        format!("All Notes Off sent to '{}'", connected_port_name),
+                        format!("All Notes Off sent to '{}'", port_name),
                     );
                 }
+                // Keep the freshly opened connection alive to avoid
+                // immediately stressing the backend on the next operation.
+                self.active_midi_conn = Some(conn);
             }
-            Err(error) => {
+            Err(err) => {
                 self.state.add_log(
                     LogLevel::Warning,
                     format!(
-                        "Could not open MIDI output '{}' for emergency All Notes Off: {:#}",
-                        midi_target, error
+                        "Could not open MIDI output '{}' for All Notes Off: {:#}",
+                        midi_target, err
                     ),
                 );
             }
         }
     }
-
-    pub fn stop_session(&mut self) {
-        if let Some(cancel_flag) = &self.engine_cancel {
-            cancel_flag.store(true, Ordering::SeqCst);
-        }
-        self.stop_requested = true;
-        self.restart_blocked_until = Some(Instant::now() + Duration::from_millis(1200));
-        self.state.add_log(
-            LogLevel::Info,
-            "Stop requested: cancelling active sampling loop.".to_string(),
-        );
-
-        if !self.engine_running.load(Ordering::SeqCst) {
-            self.send_all_notes_off_best_effort("stop button (idle)");
-            self.stop_requested = false;
-        }
-    }
 }
+
+// ---------------------------------------------------------------------------
+// Drop
+// ---------------------------------------------------------------------------
 
 impl Drop for AutosampleApp {
     fn drop(&mut self) {
@@ -190,10 +320,16 @@ impl Drop for AutosampleApp {
     }
 }
 
+// ---------------------------------------------------------------------------
+// eframe::App
+// ---------------------------------------------------------------------------
+
 impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Poll device scan results.
         self.state.poll_device_scan_result();
 
+        // Detect engine thread completion.
         if !self.engine_running.load(Ordering::SeqCst) {
             if self.engine_cancel.is_some() {
                 self.engine_cancel = None;
@@ -207,14 +343,14 @@ impl eframe::App for AutosampleApp {
             }
         }
 
-        // Process engine events
+        // Drain engine event channel.
         if let Some(rx) = &self.event_rx {
             while let Ok(event) = rx.try_recv() {
                 self.state.handle_engine_event(event);
             }
         }
 
-        // Request continuous repaint while running
+        // Repaint scheduling.
         if self.state.engine_status == EngineStatus::Running {
             ctx.request_repaint();
         }
@@ -222,33 +358,32 @@ impl eframe::App for AutosampleApp {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
 
-        // Top menu bar
+        // -------------------------------------------------------------------
+        // Menu bar
+        // -------------------------------------------------------------------
         egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
-                    if ui.button("Load Preset...").clicked() {
+                    if ui.button("Load Preset…").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("JSON", &["json"])
                             .pick_file()
                         {
                             match self.state.load_preset(&path.display().to_string()) {
-                                Ok(_) => {
-                                    self.state.add_log(
-                                        autosample_core::LogLevel::Info,
-                                        format!("Loaded preset from {}", path.display()),
-                                    );
-                                }
-                                Err(e) => {
-                                    self.state.add_log(
-                                        autosample_core::LogLevel::Error,
-                                        format!("Failed to load preset: {}", e),
-                                    );
-                                }
+                                Ok(_) => self.state.add_log(
+                                    LogLevel::Info,
+                                    format!("Loaded preset from {}", path.display()),
+                                ),
+                                Err(e) => self.state.add_log(
+                                    LogLevel::Error,
+                                    format!("Failed to load preset: {}", e),
+                                ),
                             }
                         }
                         ui.close_menu();
                     }
-                    if ui.button("Save Preset...").clicked() {
+
+                    if ui.button("Save Preset…").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("JSON", &["json"])
                             .save_file()
@@ -258,23 +393,21 @@ impl eframe::App for AutosampleApp {
                                 path_str.push_str(".json");
                             }
                             match self.state.save_preset(&path_str) {
-                                Ok(_) => {
-                                    self.state.add_log(
-                                        autosample_core::LogLevel::Info,
-                                        format!("Saved preset to {}", path_str),
-                                    );
-                                }
-                                Err(e) => {
-                                    self.state.add_log(
-                                        autosample_core::LogLevel::Error,
-                                        format!("Failed to save preset: {}", e),
-                                    );
-                                }
+                                Ok(_) => self.state.add_log(
+                                    LogLevel::Info,
+                                    format!("Saved preset to {}", path_str),
+                                ),
+                                Err(e) => self.state.add_log(
+                                    LogLevel::Error,
+                                    format!("Failed to save preset: {}", e),
+                                ),
                             }
                         }
                         ui.close_menu();
                     }
+
                     ui.separator();
+
                     if ui.button("Quit").clicked() {
                         self.send_all_notes_off_best_effort("quit command");
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -289,7 +422,9 @@ impl eframe::App for AutosampleApp {
             });
         });
 
-        // Single-screen UI
+        // -------------------------------------------------------------------
+        // Main UI
+        // -------------------------------------------------------------------
         if let Some(cmd) = ui::single_screen::show(ctx, &mut self.state) {
             match cmd {
                 ui::progress::RunCommand::Start => self.start_session(),
@@ -299,8 +434,7 @@ impl eframe::App for AutosampleApp {
                     if self.engine_running.load(Ordering::SeqCst) || self.stop_requested {
                         self.state.add_log(
                             LogLevel::Warning,
-                            "Clear Project blocked while run teardown is in progress."
-                                .to_string(),
+                            "Clear Project blocked while run teardown is in progress.".to_string(),
                         );
                     } else {
                         self.state.clear_project();

@@ -1,4 +1,4 @@
-use autosample_core::RunConfig;
+use autosample_core::{OutputOrganization, RunConfig};
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
@@ -87,6 +87,15 @@ pub struct RunConfigArgs {
     /// Skip existing files
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub resume: bool,
+
+    /// Output directory organization (flat, by-note, by-note-velocity)
+    #[arg(
+        long = "output-organization",
+        value_name = "MODE",
+        default_value = "flat",
+        value_parser = ["flat", "by-note", "by-note-velocity"]
+    )]
+    pub output_organization: String,
 }
 
 impl From<RunConfigArgs> for RunConfig {
@@ -108,6 +117,8 @@ impl From<RunConfigArgs> for RunConfig {
             normalize: a.normalize,
             round_robin: a.round_robin,
             resume: a.resume,
+            output_organization: OutputOrganization::from_str(&a.output_organization)
+                .unwrap_or_default(),
         }
     }
 }
