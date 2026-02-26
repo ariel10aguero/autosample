@@ -25,6 +25,7 @@ pub struct AppState {
     pub engine_status: EngineStatus,
     pub progress: ProgressState,
     pub logs: Vec<LogEntry>,
+    pub input_meter_db: Option<f32>,
 
     // Presets
     pub preset_name: String,
@@ -83,6 +84,7 @@ impl Default for AppState {
             engine_status: EngineStatus::Idle,
             progress: ProgressState::default(),
             logs: Vec::new(),
+            input_meter_db: None,
             device_scan_state: DeviceScanState::Idle,
             last_scan_completed_at: None,
             device_scan_rx: None,

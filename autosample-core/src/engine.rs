@@ -2,7 +2,8 @@ use crate::audio::{find_audio_device, start_audio_capture};
 use crate::dsp::{apply_fade, get_peak_db, normalize_audio, trim_silence};
 use crate::export::{check_ffmpeg_available, convert_to_mp3, write_wav};
 use crate::midi::{
-    connect_midi_output_by_name, send_all_notes_off, send_note_off, send_note_on,
+    connect_midi_output_by_name, send_all_notes_off, send_note_off, send_note_off_channel,
+    send_note_on, send_note_on_channel,
 };
 use crate::parse::{parse_notes, parse_velocities};
 use crate::ringbuf::{consume_audio_packets, RingBuffer};
@@ -17,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tracing::warn;
 
 pub struct AutosampleEngine {
     cancel_flag: Arc<AtomicBool>,
@@ -189,6 +191,7 @@ impl AutosampleEngine {
         };
 
         // Main sampling loop
+        let mut warned_about_silent_input = false;
         for (idx, job) in jobs.iter().enumerate() {
             if is_cancelled() {
                 let _ = progress_tx.send(ProgressUpdate::Cancelled);
@@ -240,6 +243,27 @@ impl AutosampleEngine {
                     // Process the audio
                     let processed = process_audio(&samples, &config, channels);
                     let peak_db = get_peak_db(&processed);
+
+                    // Avoid exporting empty/silent captures. This usually means no audio
+                    // signal is reaching the selected input device.
+                    if peak_db <= -90.0 {
+                        if !warned_about_silent_input {
+                            warned_about_silent_input = true;
+                            let _ = progress_tx.send(ProgressUpdate::Log {
+                                level: LogLevel::Error,
+                                message: format!(
+                                    "No input signal detected on audio device '{}'. Check cabling, input gain/monitoring, and macOS microphone permission for this app/terminal.",
+                                    config.audio_in
+                                ),
+                            });
+                        }
+                        let _ = progress_tx.send(ProgressUpdate::SampleFailed {
+                            index: idx + 1,
+                            total: total_jobs,
+                            error: "Captured silence (-inf dB). Sample was not exported.".to_string(),
+                        });
+                        continue;
+                    }
 
                     // Export
                     if let Err(e) = export_sample(
@@ -332,6 +356,100 @@ fn capture_sample(
     channels: u16,
     is_cancelled: &dyn Fn() -> bool,
 ) -> Result<Vec<f32>> {
+    const SILENT_CAPTURE_DB: f32 = -90.0;
+
+    let first_pass = capture_sample_with_trigger(
+        midi_conn,
+        receiver,
+        ring,
+        job,
+        config,
+        sample_rate,
+        channels,
+        is_cancelled,
+        MidiTriggerMode::Channel1,
+    )?;
+    let first_peak = get_peak_db(&first_pass);
+    if first_peak > SILENT_CAPTURE_DB {
+        return Ok(first_pass);
+    }
+    warn!(
+        "Captured silence on channel 1 for note {} vel {}; retrying on all MIDI channels",
+        job.note, job.velocity
+    );
+
+    // Some synths are configured to listen on a non-default MIDI channel.
+    // If the first pass is silent, retry by broadcasting on all channels.
+    let fallback_pass = capture_sample_with_trigger(
+        midi_conn,
+        receiver,
+        ring,
+        job,
+        config,
+        sample_rate,
+        channels,
+        is_cancelled,
+        MidiTriggerMode::AllChannels,
+    )?;
+
+    let fallback_peak = get_peak_db(&fallback_pass);
+    if fallback_peak > first_peak {
+        Ok(fallback_pass)
+    } else {
+        Ok(first_pass)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MidiTriggerMode {
+    Channel1,
+    AllChannels,
+}
+
+fn send_note_on_with_mode(
+    midi_conn: &mut midir::MidiOutputConnection,
+    note: u8,
+    velocity: u8,
+    mode: MidiTriggerMode,
+) -> Result<()> {
+    match mode {
+        MidiTriggerMode::Channel1 => send_note_on(midi_conn, note, velocity),
+        MidiTriggerMode::AllChannels => {
+            for channel in 0u8..16 {
+                send_note_on_channel(midi_conn, note, velocity, channel)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn send_note_off_with_mode(
+    midi_conn: &mut midir::MidiOutputConnection,
+    note: u8,
+    mode: MidiTriggerMode,
+) -> Result<()> {
+    match mode {
+        MidiTriggerMode::Channel1 => send_note_off(midi_conn, note),
+        MidiTriggerMode::AllChannels => {
+            for channel in 0u8..16 {
+                send_note_off_channel(midi_conn, note, channel)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn capture_sample_with_trigger(
+    midi_conn: &mut midir::MidiOutputConnection,
+    receiver: &Receiver<Vec<f32>>,
+    ring: &mut RingBuffer,
+    job: &SampleJob,
+    config: &RunConfig,
+    sample_rate: u32,
+    channels: u16,
+    is_cancelled: &dyn Fn() -> bool,
+    trigger_mode: MidiTriggerMode,
+) -> Result<Vec<f32>> {
     let preroll_samples =
         (sample_rate as usize * channels as usize * config.preroll_ms as usize) / 1000;
     let hold_samples =
@@ -351,12 +469,12 @@ fn capture_sample(
         thread::sleep(Duration::from_millis(1));
     }
 
-    send_note_on(midi_conn, job.note, job.velocity)?;
+    send_note_on_with_mode(midi_conn, job.note, job.velocity, trigger_mode)?;
 
     let hold_start = std::time::Instant::now();
     while hold_start.elapsed() < Duration::from_millis(config.hold_ms as u64) {
         if is_cancelled() {
-            let _ = send_note_off(midi_conn, job.note);
+            let _ = send_note_off_with_mode(midi_conn, job.note, trigger_mode);
             let _ = send_all_notes_off(midi_conn);
             anyhow::bail!("Capture cancelled");
         }
@@ -364,7 +482,7 @@ fn capture_sample(
         thread::sleep(Duration::from_millis(1));
     }
 
-    send_note_off(midi_conn, job.note)?;
+    send_note_off_with_mode(midi_conn, job.note, trigger_mode)?;
 
     let tail_start = std::time::Instant::now();
     while tail_start.elapsed() < Duration::from_millis(config.tail_ms as u64) {

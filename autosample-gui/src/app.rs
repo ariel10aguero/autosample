@@ -1,8 +1,9 @@
 use crate::state::AppState;
 use crate::ui;
-use autosample_core::{AutosampleEngine, EngineStatus, LogLevel, ProgressUpdate};
+use autosample_core::audio::{find_audio_device, start_audio_capture, AudioCapture};
 use autosample_core::midi::ensure_midi_warmup;
 use autosample_core::parse::{parse_notes, parse_velocities};
+use autosample_core::{AutosampleEngine, EngineStatus, LogLevel, ProgressUpdate};
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
 use midir::MidiOutputConnection;
@@ -14,6 +15,8 @@ use std::time::{Duration, Instant};
 // How long after a Stop we refuse to allow a new Start.  Gives CoreMIDI time
 // to fully release the previous connection before we open a new one.
 const POST_STOP_SETTLE_MS: u64 = 2000;
+const METER_FLOOR_DB: f32 = -60.0;
+const METER_SMOOTHING_ALPHA: f32 = 0.25;
 
 pub struct AutosampleApp {
     pub state: AppState,
@@ -29,6 +32,9 @@ pub struct AutosampleApp {
     stop_requested: bool,
     restart_blocked_until: Option<Instant>,
     event_rx: Option<Receiver<ProgressUpdate>>,
+    meter_capture: Option<AudioCapture>,
+    meter_rx: Option<Receiver<Vec<f32>>>,
+    meter_config_key: Option<(String, u32, u16)>,
 }
 
 impl AutosampleApp {
@@ -52,7 +58,115 @@ impl AutosampleApp {
             stop_requested: false,
             restart_blocked_until: None,
             event_rx: None,
+            meter_capture: None,
+            meter_rx: None,
+            meter_config_key: None,
         }
+    }
+
+    fn desired_meter_key(&self) -> Option<(String, u32, u16)> {
+        let audio_in = self.state.config.audio_in.trim();
+        if audio_in.is_empty() {
+            None
+        } else {
+            Some((
+                audio_in.to_string(),
+                self.state.config.sr,
+                self.state.config.channels,
+            ))
+        }
+    }
+
+    fn stop_input_meter(&mut self) {
+        self.meter_capture = None;
+        self.meter_rx = None;
+        self.meter_config_key = None;
+        self.state.input_meter_db = None;
+    }
+
+    fn start_input_meter(&mut self, audio_in: &str, sr: u32, channels: u16) {
+        let device = match find_audio_device(audio_in) {
+            Ok(device) => device,
+            Err(err) => {
+                self.state.add_log(
+                    LogLevel::Warning,
+                    format!("Input meter could not open audio device '{}': {}", audio_in, err),
+                );
+                self.stop_input_meter();
+                return;
+            }
+        };
+
+        let (tx, rx) = unbounded();
+        match start_audio_capture(device, sr, channels, tx) {
+            Ok(capture) => {
+                self.meter_capture = Some(capture);
+                self.meter_rx = Some(rx);
+                self.meter_config_key = Some((audio_in.to_string(), sr, channels));
+                self.state.input_meter_db = None;
+            }
+            Err(err) => {
+                self.state.add_log(
+                    LogLevel::Warning,
+                    format!("Input meter could not start stream: {}", err),
+                );
+                self.stop_input_meter();
+            }
+        }
+    }
+
+    fn ensure_input_meter(&mut self) {
+        if self.engine_running.load(Ordering::SeqCst) {
+            self.stop_input_meter();
+            return;
+        }
+
+        let desired = self.desired_meter_key();
+        if desired.is_none() {
+            self.stop_input_meter();
+            return;
+        }
+
+        if self.meter_config_key == desired {
+            return;
+        }
+
+        self.stop_input_meter();
+        if let Some((audio_in, sr, channels)) = desired {
+            self.start_input_meter(&audio_in, sr, channels);
+        }
+    }
+
+    fn poll_input_meter(&mut self) {
+        let Some(rx) = &self.meter_rx else {
+            self.state.input_meter_db = None;
+            return;
+        };
+
+        let mut peak = 0.0f32;
+        let mut saw_packet = false;
+        while let Ok(packet) = rx.try_recv() {
+            saw_packet = true;
+            for s in packet {
+                peak = peak.max(s.abs());
+            }
+        }
+
+        if !saw_packet {
+            return;
+        }
+
+        let instant_db = if peak <= 1e-7 {
+            METER_FLOOR_DB
+        } else {
+            (20.0 * peak.log10()).clamp(METER_FLOOR_DB, 0.0)
+        };
+
+        let smoothed = match self.state.input_meter_db {
+            Some(prev) => (prev * (1.0 - METER_SMOOTHING_ALPHA)) + (instant_db * METER_SMOOTHING_ALPHA),
+            None => instant_db,
+        };
+        self.state.input_meter_db = Some(smoothed);
     }
 
     // -----------------------------------------------------------------------
@@ -167,6 +281,9 @@ impl AutosampleApp {
             LogLevel::Info,
             format!("MIDI connected: {}", connected_port_name),
         );
+
+        // Release meter stream so the sampling engine can own the device.
+        self.stop_input_meter();
 
         // --- launch engine thread ------------------------------------------
         let (tx, rx) = unbounded();
@@ -328,6 +445,8 @@ impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Poll device scan results.
         self.state.poll_device_scan_result();
+        self.ensure_input_meter();
+        self.poll_input_meter();
 
         // Detect engine thread completion.
         if !self.engine_running.load(Ordering::SeqCst) {
@@ -353,6 +472,8 @@ impl eframe::App for AutosampleApp {
         // Repaint scheduling.
         if self.state.engine_status == EngineStatus::Running {
             ctx.request_repaint();
+        } else if self.state.input_meter_db.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(60));
         }
         if self.state.is_device_scan_running() {
             ctx.request_repaint_after(Duration::from_millis(100));

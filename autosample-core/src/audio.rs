@@ -81,16 +81,54 @@ pub fn find_audio_device(name_or_id: &str) -> Result<Device> {
         }
     }
 
-    // Try finding by name
-    for device in host.input_devices()? {
-        if let Ok(device_name) = device.name() {
-            if device_name.contains(name_or_id) {
-                return Ok(device);
-            }
-        }
+    let mut devices: Vec<(Device, String)> = host
+        .input_devices()?
+        .filter_map(|d| d.name().ok().map(|n| (d, n)))
+        .collect();
+
+    // Prefer exact match first so similarly named devices do not collide.
+    if let Some(pos) = devices.iter().position(|(_, name)| name == name_or_id) {
+        return Ok(devices.swap_remove(pos).0);
     }
 
-    anyhow::bail!("Audio device not found: {}", name_or_id)
+    let needle_lower = name_or_id.to_lowercase();
+    if let Some(pos) = devices
+        .iter()
+        .position(|(_, name)| name.to_lowercase() == needle_lower)
+    {
+        return Ok(devices.swap_remove(pos).0);
+    }
+
+    // Then allow substring match.
+    let mut contains_positions = devices
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, (_, name))| name.to_lowercase().contains(&needle_lower).then_some(idx));
+    if let Some(first_idx) = contains_positions.next() {
+        if contains_positions.next().is_some() {
+            let matches: Vec<String> = devices
+                .iter()
+                .filter_map(|(_, name)| name.to_lowercase().contains(&needle_lower).then_some(name.clone()))
+                .collect();
+            anyhow::bail!(
+                "Audio device name '{}' is ambiguous. Matches: {}. Select by numeric index instead.",
+                name_or_id,
+                matches.join(", ")
+            );
+        }
+        return Ok(devices.swap_remove(first_idx).0);
+    }
+
+    let available: Vec<String> = devices.into_iter().map(|(_, name)| name).collect();
+    anyhow::bail!(
+        "Audio device not found: '{}'. Available inputs: {}",
+        name_or_id,
+        if available.is_empty() {
+            "(none)".to_string()
+        } else {
+            available.join(", ")
+        }
+    )
 }
 
 pub fn start_audio_capture(
@@ -99,6 +137,7 @@ pub fn start_audio_capture(
     requested_channels: u16,
     sender: Sender<Vec<f32>>,
 ) -> Result<AudioCapture> {
+    let device_name = device.name().unwrap_or_else(|_| "Unknown".to_string());
     let mut config = device
         .default_input_config()
         .map_err(|e| anyhow::anyhow!("Failed to get default input config: {}", e))?;
@@ -117,7 +156,8 @@ pub fn start_audio_capture(
     }
 
     info!(
-        "Audio capture config: {} Hz, {} ch, {:?}",
+        "Audio capture using '{}': {} Hz, {} ch, {:?}",
+        device_name,
         config.sample_rate().0,
         config.channels(),
         config.sample_format()

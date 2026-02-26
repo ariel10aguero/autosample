@@ -355,12 +355,27 @@ pub fn connect_midi_output_by_name(
 // ---------------------------------------------------------------------------
 
 pub fn send_note_on(conn: &mut MidiOutputConnection, note: u8, velocity: u8) -> Result<()> {
-    conn.send(&[0x90, note, velocity])?;
+    send_note_on_channel(conn, note, velocity, 0)
+}
+
+pub fn send_note_on_channel(
+    conn: &mut MidiOutputConnection,
+    note: u8,
+    velocity: u8,
+    channel: u8,
+) -> Result<()> {
+    let ch = channel & 0x0F;
+    conn.send(&[0x90 | ch, note, velocity])?;
     Ok(())
 }
 
 pub fn send_note_off(conn: &mut MidiOutputConnection, note: u8) -> Result<()> {
-    conn.send(&[0x80, note, 0])?;
+    send_note_off_channel(conn, note, 0)
+}
+
+pub fn send_note_off_channel(conn: &mut MidiOutputConnection, note: u8, channel: u8) -> Result<()> {
+    let ch = channel & 0x0F;
+    conn.send(&[0x80 | ch, note, 0])?;
     Ok(())
 }
 
