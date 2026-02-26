@@ -7,12 +7,14 @@ use eframe::egui;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct AutosampleApp {
     pub state: AppState,
     engine_running: Arc<AtomicBool>,
     engine_cancel: Option<Arc<AtomicBool>>,
+    stop_requested: bool,
+    restart_blocked_until: Option<Instant>,
     event_rx: Option<Receiver<autosample_core::ProgressUpdate>>,
 }
 
@@ -28,6 +30,8 @@ impl AutosampleApp {
             state,
             engine_running: Arc::new(AtomicBool::new(false)),
             engine_cancel: None,
+            stop_requested: false,
+            restart_blocked_until: None,
             event_rx: None,
         }
     }
@@ -43,6 +47,25 @@ impl AutosampleApp {
                     .to_string(),
             );
             return;
+        }
+        if self.stop_requested {
+            self.state.add_log(
+                LogLevel::Warning,
+                "Start blocked: stop is still in progress. Wait until teardown completes."
+                    .to_string(),
+            );
+            return;
+        }
+        if let Some(blocked_until) = self.restart_blocked_until {
+            if Instant::now() < blocked_until {
+                self.state.add_log(
+                    LogLevel::Warning,
+                    "Start blocked: waiting briefly for MIDI backend to settle after Stop."
+                        .to_string(),
+                );
+                return;
+            }
+            self.restart_blocked_until = None;
         }
 
         let midi_target = self.state.config.midi_out.clone();
@@ -144,14 +167,20 @@ impl AutosampleApp {
     }
 
     pub fn stop_session(&mut self) {
-        self.send_all_notes_off_best_effort("stop button");
         if let Some(cancel_flag) = &self.engine_cancel {
             cancel_flag.store(true, Ordering::SeqCst);
         }
+        self.stop_requested = true;
+        self.restart_blocked_until = Some(Instant::now() + Duration::from_millis(1200));
         self.state.add_log(
             LogLevel::Info,
             "Stop requested: cancelling active sampling loop.".to_string(),
         );
+
+        if !self.engine_running.load(Ordering::SeqCst) {
+            self.send_all_notes_off_best_effort("stop button (idle)");
+            self.stop_requested = false;
+        }
     }
 }
 
@@ -165,8 +194,17 @@ impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.state.poll_device_scan_result();
 
-        if !self.engine_running.load(Ordering::SeqCst) && self.engine_cancel.is_some() {
-            self.engine_cancel = None;
+        if !self.engine_running.load(Ordering::SeqCst) {
+            if self.engine_cancel.is_some() {
+                self.engine_cancel = None;
+            }
+            if self.stop_requested {
+                self.stop_requested = false;
+                self.state.add_log(
+                    LogLevel::Info,
+                    "Stop complete: sampling loop terminated.".to_string(),
+                );
+            }
         }
 
         // Process engine events
@@ -257,7 +295,17 @@ impl eframe::App for AutosampleApp {
                 ui::progress::RunCommand::Start => self.start_session(),
                 ui::progress::RunCommand::Stop => self.stop_session(),
                 ui::progress::RunCommand::ClearLogs => self.state.logs.clear(),
-                ui::progress::RunCommand::ClearProject => self.state.clear_project(),
+                ui::progress::RunCommand::ClearProject => {
+                    if self.engine_running.load(Ordering::SeqCst) || self.stop_requested {
+                        self.state.add_log(
+                            LogLevel::Warning,
+                            "Clear Project blocked while run teardown is in progress."
+                                .to_string(),
+                        );
+                    } else {
+                        self.state.clear_project();
+                    }
+                }
             }
         }
     }
