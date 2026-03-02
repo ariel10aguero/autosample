@@ -1,20 +1,20 @@
 # Autosample - CLI Autosampler
 
-A cross-platform Rust autosampler that triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
+A lightweight Rust CLI autosampler for macOS, Windows, and Linux that triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
 
 ---
 
 ## Overview
 
-Autosample is built for hardware or software instrument sampling sessions where you need repeatable note/velocity capture and predictable output.
+Autosample helps you sample instruments quickly and consistently.
+Pick your notes and velocity layers, record each one automatically, and get clean files ready to use in your sampler.
 
-It provides:
+It gives you:
 
-* MIDI note triggering
-* Audio recording from selected device input
-* Optional trim and normalization
-* WAV/MP3 export
-* Resume support for long-running sessions
+* Automatic MIDI note playback and recording
+* Optional cleanup tools (trim and normalize)
+* WAV or MP3 export
+* Resume mode so long sessions are easy to continue
 
 ---
 
