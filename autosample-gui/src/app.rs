@@ -1,4 +1,4 @@
-use crate::state::AppState;
+use crate::state::{AppState, AudioInputPermissionState};
 use crate::ui;
 use autosample_core::audio::{find_audio_device, start_audio_capture, AudioCapture};
 use autosample_core::midi::ensure_midi_warmup;
@@ -35,6 +35,7 @@ pub struct AutosampleApp {
     meter_capture: Option<AudioCapture>,
     meter_rx: Option<Receiver<Vec<f32>>>,
     meter_config_key: Option<(String, u32, u16)>,
+    startup_audio_permission_probe_done: bool,
 }
 
 impl AutosampleApp {
@@ -61,6 +62,87 @@ impl AutosampleApp {
             meter_capture: None,
             meter_rx: None,
             meter_config_key: None,
+            startup_audio_permission_probe_done: false,
+        }
+    }
+
+    fn audio_permission_platform_hint() -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "Allow microphone access in System Settings -> Privacy & Security -> Microphone."
+        }
+        #[cfg(target_os = "windows")]
+        {
+            "Enable microphone access in Settings -> Privacy & security -> Microphone."
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            "Ensure your desktop audio service and app sandbox policies allow microphone input."
+        }
+    }
+
+    fn audio_permission_menu_status(&self) -> &'static str {
+        match self.state.audio_permission_state {
+            AudioInputPermissionState::Unknown => "Not checked yet",
+            AudioInputPermissionState::Checking => "Checking...",
+            AudioInputPermissionState::Granted => "Granted",
+            AudioInputPermissionState::Denied(_) => "Blocked",
+        }
+    }
+
+    fn run_audio_permission_probe(&mut self, reason: &str) {
+        let audio_in = self.state.config.audio_in.trim().to_string();
+        if audio_in.is_empty() {
+            return;
+        }
+
+        self.state.set_audio_permission_checking();
+        let device = match find_audio_device(&audio_in) {
+            Ok(device) => device,
+            Err(err) => {
+                let reason = format!(
+                    "Could not open selected input device '{}': {}. {}",
+                    audio_in,
+                    err,
+                    Self::audio_permission_platform_hint()
+                );
+                self.state.set_audio_permission_denied(reason.clone());
+                self.state.add_log(
+                    LogLevel::Warning,
+                    format!("Audio permission check failed: {}", reason),
+                );
+                return;
+            }
+        };
+
+        // Opening a short-lived stream here triggers first-run permission prompts
+        // where the OS requires explicit microphone consent.
+        let (tx, _rx) = unbounded();
+        match start_audio_capture(
+            device,
+            self.state.config.sr,
+            self.state.config.channels,
+            tx,
+        ) {
+            Ok(_capture) => {
+                self.state.set_audio_permission_granted();
+                self.state.add_log(
+                    LogLevel::Info,
+                    format!("Audio input access confirmed ({}).", reason),
+                );
+            }
+            Err(err) => {
+                let reason = format!(
+                    "Audio input stream could not start: {}. {}",
+                    err,
+                    Self::audio_permission_platform_hint()
+                );
+                self.state.set_audio_permission_denied(reason.clone());
+                self.state.add_log(
+                    LogLevel::Warning,
+                    format!("Audio permission check failed: {}", reason),
+                );
+            }
         }
     }
 
@@ -117,6 +199,11 @@ impl AutosampleApp {
 
     fn ensure_input_meter(&mut self) {
         if self.engine_running.load(Ordering::SeqCst) {
+            self.stop_input_meter();
+            return;
+        }
+
+        if !self.state.audio_permission_is_granted() {
             self.stop_input_meter();
             return;
         }
@@ -184,6 +271,16 @@ impl AutosampleApp {
                 "Start blocked: device refresh is still running. \
                  Wait until scanning completes."
                     .to_string(),
+            );
+            return;
+        }
+        if !self.state.audio_permission_is_granted() {
+            self.state.add_log(
+                LogLevel::Error,
+                format!(
+                    "Start blocked: audio input permission is not granted. {}",
+                    Self::audio_permission_platform_hint()
+                ),
             );
             return;
         }
@@ -445,6 +542,23 @@ impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Poll device scan results.
         self.state.poll_device_scan_result();
+
+        if self.state.consume_audio_permission_recheck_requested() {
+            self.state.reset_audio_permission_state();
+            self.startup_audio_permission_probe_done = false;
+            self.state.add_log(
+                LogLevel::Info,
+                "Retrying audio permission check…".to_string(),
+            );
+        }
+
+        if !self.startup_audio_permission_probe_done
+            && !self.state.is_device_scan_running()
+            && !self.state.config.audio_in.trim().is_empty()
+        {
+            self.run_audio_permission_probe("startup check");
+            self.startup_audio_permission_probe_done = true;
+        }
         self.ensure_input_meter();
         self.poll_input_meter();
 
@@ -524,6 +638,21 @@ impl eframe::App for AutosampleApp {
                                 ),
                             }
                         }
+                        ui.close_menu();
+                    }
+
+                    ui.separator();
+                    ui.label(egui::RichText::new("Audio Input Permission").strong());
+                    ui.label(format!("Status: {}", self.audio_permission_menu_status()));
+
+                    if let AudioInputPermissionState::Denied(reason) =
+                        &self.state.audio_permission_state
+                    {
+                        ui.label(reason);
+                    }
+
+                    if ui.button("Check Audio Permission").clicked() {
+                        self.state.request_audio_permission_recheck();
                         ui.close_menu();
                     }
 

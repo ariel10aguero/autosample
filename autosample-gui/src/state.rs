@@ -26,6 +26,7 @@ pub struct AppState {
     pub progress: ProgressState,
     pub logs: Vec<LogEntry>,
     pub input_meter_db: Option<f32>,
+    pub audio_permission_state: AudioInputPermissionState,
 
     // Presets
     pub preset_name: String,
@@ -39,6 +40,7 @@ pub struct AppState {
 
     device_scan_rx: Option<Receiver<device_scan::DeviceScanOutcome>>,
     pending_midi_scan_error: Option<String>,
+    audio_permission_recheck_requested: bool,
 }
 
 #[derive(Clone, Default)]
@@ -67,6 +69,14 @@ pub enum DeviceScanState {
     Failed(String),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AudioInputPermissionState {
+    Unknown,
+    Checking,
+    Granted,
+    Denied(String),
+}
+
 // ---------------------------------------------------------------------------
 // Default
 // ---------------------------------------------------------------------------
@@ -85,10 +95,12 @@ impl Default for AppState {
             progress: ProgressState::default(),
             logs: Vec::new(),
             input_meter_db: None,
+            audio_permission_state: AudioInputPermissionState::Unknown,
             device_scan_state: DeviceScanState::Idle,
             last_scan_completed_at: None,
             device_scan_rx: None,
             pending_midi_scan_error: None,
+            audio_permission_recheck_requested: false,
         }
     }
 }
@@ -227,6 +239,16 @@ impl AppState {
         }
     }
 
+    pub fn request_audio_permission_recheck(&mut self) {
+        self.audio_permission_recheck_requested = true;
+    }
+
+    pub fn consume_audio_permission_recheck_requested(&mut self) -> bool {
+        let requested = self.audio_permission_recheck_requested;
+        self.audio_permission_recheck_requested = false;
+        requested
+    }
+
     // -----------------------------------------------------------------------
     // Internal scan helpers
     // -----------------------------------------------------------------------
@@ -293,6 +315,26 @@ impl AppState {
             level,
             message,
         });
+    }
+
+    pub fn set_audio_permission_checking(&mut self) {
+        self.audio_permission_state = AudioInputPermissionState::Checking;
+    }
+
+    pub fn set_audio_permission_granted(&mut self) {
+        self.audio_permission_state = AudioInputPermissionState::Granted;
+    }
+
+    pub fn set_audio_permission_denied(&mut self, reason: String) {
+        self.audio_permission_state = AudioInputPermissionState::Denied(reason);
+    }
+
+    pub fn reset_audio_permission_state(&mut self) {
+        self.audio_permission_state = AudioInputPermissionState::Unknown;
+    }
+
+    pub fn audio_permission_is_granted(&self) -> bool {
+        matches!(self.audio_permission_state, AudioInputPermissionState::Granted)
     }
 
     // -----------------------------------------------------------------------
