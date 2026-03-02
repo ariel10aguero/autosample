@@ -5,7 +5,7 @@ on:
     types: [published]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -54,6 +54,7 @@ jobs:
           mkdir -p dist
           cp target/release/autosample dist/autosample
           cp target/release/autosample-gui dist/autosample-gui
+          (cd dist && zip -r "../autosample-macOS.zip" .)
 
       - name: Prepare artifacts (Windows)
         if: runner.os == 'Windows'
@@ -62,6 +63,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\autosample.exe dist\autosample.exe
           Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
+          Compress-Archive -Path dist\* -DestinationPath autosample-Windows.zip -Force
 
       - name: Prepare artifacts (Linux)
         if: runner.os == 'Linux'
@@ -69,9 +71,28 @@ jobs:
           mkdir -p dist
           cp target/release/autosample dist/autosample
           cp target/release/autosample-gui dist/autosample-gui
+          (cd dist && zip -r "../autosample-Linux.zip" .)
 
-      - name: Upload artifacts
+      - name: Upload build archive
         uses: actions/upload-artifact@v4
         with:
           name: autosample-${{ runner.os }}
-          path: dist/*
+          path: autosample-${{ runner.os }}.zip
+
+  release-assets:
+    name: Attach assets to GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: autosample-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Upload archives to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: release-assets/*.zip
