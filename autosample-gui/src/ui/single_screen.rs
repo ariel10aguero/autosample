@@ -43,7 +43,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                         ui.add_space(12.0);
 
                         egui::CollapsingHeader::new("🔌 Devices")
-                            .default_open(true)
+                            .default_open(false)
                             .show(ui, |ui| {
                                 ui::devices::show(ui, state);
                             });
@@ -51,7 +51,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                         ui.add_space(8.0);
 
                         egui::CollapsingHeader::new("🎹 Session")
-                            .default_open(true)
+                            .default_open(false)
                             .show(ui, |ui| {
                                 ui::session::show(ui, state);
                             });
