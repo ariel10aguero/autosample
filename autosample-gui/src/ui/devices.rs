@@ -149,16 +149,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
         ui.add_space(6.0);
 
-        let meter_floor_db = -60.0f32;
-        let meter_db = state.input_meter_db.unwrap_or(meter_floor_db);
-        let meter_norm = ((meter_db - meter_floor_db) / (0.0 - meter_floor_db)).clamp(0.0, 1.0);
-        let meter_text = if state.config.audio_in.trim().is_empty() {
-            "Input meter: select audio device".to_string()
-        } else if state.input_meter_db.is_some() {
-            format!("Input meter: {:.1} dBFS", meter_db)
-        } else {
-            "Input meter: waiting for signal...".to_string()
-        };
-        ui.add(egui::ProgressBar::new(meter_norm).text(meter_text));
+        if state.engine_status != EngineStatus::Running {
+            let meter_floor_db = -60.0f32;
+            let meter_db = state.input_meter_db.unwrap_or(meter_floor_db);
+            let meter_norm = ((meter_db - meter_floor_db) / (0.0 - meter_floor_db)).clamp(0.0, 1.0);
+            let meter_text = if state.config.audio_in.trim().is_empty() {
+                "Input meter: select audio device".to_string()
+            } else if state.input_meter_db.is_some() {
+                format!("Input meter: {:.1} dBFS", meter_db)
+            } else {
+                "Input meter: waiting for signal...".to_string()
+            };
+            ui.add(egui::ProgressBar::new(meter_norm).text(meter_text));
+        }
     });
 }
