@@ -5,6 +5,7 @@ use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // NOTE: no ScrollArea here (sidebar owns scrolling)
+    let help_label_color = egui::Color32::from_rgb(220, 230, 255);
 
     ui.group(|ui| {
         ui.label(egui::RichText::new("Note Range").strong().size(16.0));
@@ -36,15 +37,21 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             .num_columns(2)
             .spacing([8.0, 6.0])
             .show(ui, |ui| {
-                ui.label("Preroll:");
+                ui.label(egui::RichText::new("Preroll:").color(help_label_color))
+                    .on_hover_text("Wait time before recording starts after sending the MIDI note.")
+                    .on_hover_cursor(egui::CursorIcon::Help);
                 ui.add(egui::DragValue::new(&mut state.config.preroll_ms).suffix(" ms"));
                 ui.end_row();
 
-                ui.label("Hold:");
+                ui.label(egui::RichText::new("Hold:").color(help_label_color))
+                    .on_hover_text("How long the MIDI note stays pressed before note-off.")
+                    .on_hover_cursor(egui::CursorIcon::Help);
                 ui.add(egui::DragValue::new(&mut state.config.hold_ms).suffix(" ms"));
                 ui.end_row();
 
-                ui.label("Tail:");
+                ui.label(egui::RichText::new("Tail:").color(help_label_color))
+                    .on_hover_text("Extra recording time after note-off to capture release/decay.")
+                    .on_hover_cursor(egui::CursorIcon::Help);
                 ui.add(egui::DragValue::new(&mut state.config.tail_ms).suffix(" ms"));
                 ui.end_row();
             });
@@ -53,7 +60,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(10.0);
 
     ui.group(|ui| {
-        ui.label(egui::RichText::new("Round Robin").strong().size(16.0));
+        ui.label(
+            egui::RichText::new("Round Robin")
+                .strong()
+                .size(16.0)
+                .color(help_label_color),
+        )
+        .on_hover_text("Number of takes per note/velocity for variation.")
+        .on_hover_cursor(egui::CursorIcon::Help);
         ui.add_space(5.0);
 
         ui.horizontal(|ui| {
