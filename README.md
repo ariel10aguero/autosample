@@ -1,6 +1,8 @@
 # Autosample - CLI Autosampler
 
-![Autosample logo](autosample-gui/assets/logo.png)
+<p align="center">
+  <img src="autosample-gui/assets/logo.png" alt="Autosample logo" width="440" />
+</p>
 
 A lightweight Rust CLI autosampler for macOS, Windows, and Linux that triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
 
