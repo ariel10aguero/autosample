@@ -1,5 +1,7 @@
 # Autosample - CLI Autosampler
 
+![Autosample logo](autosample-gui/assets/logo.png)
+
 A lightweight Rust CLI autosampler for macOS, Windows, and Linux that triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
 
 ---
@@ -34,7 +36,7 @@ It gives you:
 
 ### Runtime
 
-* A MIDI output target (hardware synth, virtual instrument, or loopback)
+* A MIDI output target (like hardware synth)
 * An audio input device
 * ffmpeg (only required when exporting MP3 or `both`)
 
