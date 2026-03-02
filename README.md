@@ -1,75 +1,181 @@
-# Autosample - Professional CLI Autosampler
+# Autosample - CLI Autosampler
 
-A cross-platform command-line autosampler for capturing hardware and 
-software instruments via MIDI triggers and audio recording.
+A cross-platform Rust autosampler that triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
+
+---
+
+## Overview
+
+Autosample is built for hardware or software instrument sampling sessions where you need repeatable note/velocity capture and predictable output.
+
+It provides:
+
+* MIDI note triggering
+* Audio recording from selected device input
+* Optional trim and normalization
+* WAV/MP3 export
+* Resume support for long-running sessions
+
+---
 
 ## Features
 
-- 🎹 **MIDI Control**: Send precise MIDI note triggers with configurable 
-velocity
-- 🎤 **Audio Capture**: Record from any audio input device with low 
-latency
-- 💾 **Multiple Formats**: Export to WAV, MP3, or both
-- 🎚️ **Audio Processing**: Trimming, normalization, and fade-in/out
-- 🔄 **Round-Robin Support**: Multiple samples per note/velocity
-- 📁 **Smart Organization**: Structured output with metadata
-- ⏸️ **Resume Support**: Skip existing files to continue interrupted 
-sessions
-- 🖥️ **Cross-Platform**: Works on macOS, Windows, and Linux
+* **Note and Velocity Parsing:** Supports single values, lists, and ranges
+* **Timing Control:** Independent preroll, hold, and tail durations
+* **Round Robin:** Multiple takes per note/velocity
+* **Output Organization:** Flat or by-note directory layout
+* **Session Metadata:** Writes `session.json` for every run
+* **Resume Mode:** Skips already existing target files
+* **Cross-Platform:** macOS, Linux, and Windows
+
+---
+
+## Requirements
+
+### Runtime
+
+* A MIDI output target (hardware synth, virtual instrument, or loopback)
+* An audio input device
+* ffmpeg (only required when exporting MP3 or `both`)
+
+### Development / Build
+
+* Rust toolchain (stable): https://rustup.rs/
+
+---
 
 ## Installation
 
-### Prerequisites
+### 1. Clone
 
-- Rust toolchain (1.70+): https://rustup.rs/
-- For MP3 export: ffmpeg
-
-#### Installing ffmpeg
-
-**macOS:**
 ```bash
-brew install ffmpeg
+git clone https://github.com/ariel10aguero/autosample
+cd autosample
 ```
 
-## Output Organization
-
-Autosample now supports configurable sample directory organization under `output/prefix/samples`.
-
-- `Flat`  
-  `output/prefix/samples/<file>.wav`
-- `ByNote`  
-  `output/prefix/samples/<NoteName_Midi>/<file>.wav`
-- `ByNoteVelocity`  
-  `output/prefix/samples/<NoteName_Midi>/velXXX/<file>.wav`
-
-The filename format remains unchanged:
-
-`<prefix>_<NoteName>_<MidiNote>_vel<Velocity>_rr<RoundRobin>.<ext>`
-
-Examples:
-- `sample_C4_060_vel100_rr01.wav`
-- `sample_Cs4_061_vel127_rr02.mp3`
-
-## CLI
-
-Use `--output-organization` to select the directory strategy:
+### 2. Build
 
 ```bash
-autosample run \
-  --midi-out "Your MIDI Device" \
-  --audio-in "Your Audio Device" \
-  --notes C4..C5 \
-  --vel 127,100,64 \
-  --output ./output \
-  --prefix sample \
-  --output-organization by-note-velocity
+cargo build --release
+```
+
+Binary output:
+
+```text
+target/release/autosample
+```
+
+---
+
+## Quick Start
+
+### 1. List devices
+
+```bash
+./target/release/autosample list-midi
+./target/release/autosample list-audio
+```
+
+### 2. Run a small test
+
+```bash
+./target/release/autosample run \
+  --midi-out 0 \
+  --audio-in 0 \
+  --notes "C4" \
+  --vel "127" \
+  --output "./output" \
+  --prefix "test"
+```
+
+---
+
+## Usage Notes
+
+### Notes syntax (`--notes`)
+
+* Range: `C2..C6` (ascending only)
+* List: `C4,E4,G4`
+* Single: `A4`
+* Accidentals in input: `C#4`, `Db4`
+
+### Velocity syntax (`--vel`)
+
+* Range with step: `127..15:16`
+* List: `127,100,64`
+* Single: `100`
+
+### Timing model
+
+Total recording time per sample:
+
+```text
+preroll_ms + hold_ms + tail_ms
+```
+
+---
+
+## Output Layout
+
+Autosample writes to:
+
+```text
+<output>/<prefix>/
+```
+
+With `--output-organization flat`:
+
+```text
+output/Piano/
+  Piano_C4_vel127.wav
+  Piano_Cs4_vel127.wav
+  session.json
+```
+
+With `--output-organization by-note`:
+
+```text
+output/Piano/
+  C4_060/
+    Piano_C4_vel127.wav
+  Cs4_061/
+    Piano_Cs4_vel127.wav
+  session.json
 ```
 
 Accepted values:
-- `flat`
-- `by-note`
-- `by-note-velocity`
 
-## Resume Behavior
+* `flat`
+* `by-note`
 
-Resume mode (`--resume` / GUI Resume) skips jobs when the target WAV file for that job already exists at the path implied by the selected output organization mode.
+---
+
+## Common Run Example
+
+```bash
+./target/release/autosample run \
+  --midi-out "Your MIDI Device" \
+  --audio-in "Your Audio Device" \
+  --notes "C3..C6" \
+  --vel "127,100,64,32" \
+  --hold-ms 1000 \
+  --tail-ms 2000 \
+  --preroll-ms 100 \
+  --round-robin 2 \
+  --format wav \
+  --output "./output" \
+  --prefix "Piano" \
+  --output-organization by-note \
+  --resume
+```
+
+---
+
+## Troubleshooting
+
+* **MIDI device not found:** Verify with `list-midi` and use exact name/index
+* **Audio device not found:** Verify with `list-audio` and use exact name/index
+* **Attack is cut:** Increase `--preroll-ms`
+* **Release is cut:** Increase `--tail-ms`
+* **Low level output:** Use `--normalize peak`
+* **Interrupted session:** Re-run with `--resume`
