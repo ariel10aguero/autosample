@@ -1,10 +1,10 @@
-# Autosample - CLI Autosampler
+# Autosample - GUI + CLI
 
 <p align="center">
   <img src="autosample-gui/assets/logo.png" alt="Autosample logo" width="440" />
 </p>
 
-A lightweight Rust CLI autosampler for macOS, Windows, and Linux that triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
+A lightweight Rust autosampler for macOS, Windows, and Linux, focused on a desktop GUI workflow with a CLI also available. It triggers notes over MIDI, records audio input, and exports organized multisamples with metadata.
 
 ---
 
@@ -16,6 +16,7 @@ Pick your notes and velocity layers, record each one automatically, and get clea
 It gives you:
 
 * Automatic MIDI note playback and recording
+* Desktop GUI for setup, device selection, and session control
 * Optional cleanup tools (trim and normalize)
 * WAV or MP3 export
 * Resume mode so long sessions are easy to continue
@@ -183,3 +184,9 @@ Accepted values:
 * **Release is cut:** Increase `--tail-ms`
 * **Low level output:** Use `--normalize peak`
 * **Interrupted session:** Re-run with `--resume`
+
+---
+
+## GUI Screenshot
+
+![Autosample GUI screenshot](app-screenshot.png)

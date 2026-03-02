@@ -1,4 +1,4 @@
-name: Build (macOS + Windows)
+name: Build (macOS + Windows + Linux)
 
 on:
   push:
@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest]
+        os: [macos-latest, windows-latest, ubuntu-latest]
 
     steps:
       - name: Checkout
@@ -49,6 +49,13 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\autosample.exe dist\autosample.exe
           Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
+
+      - name: Prepare artifacts (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/release/autosample dist/autosample
+          cp target/release/autosample-gui dist/autosample-gui
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
