@@ -1,11 +1,8 @@
 name: Build (macOS + Windows + Linux)
 
 on:
-  push:
-    branches: [ main, master ]
-    tags:
-      - "v*"
-  pull_request:
+  release:
+    types: [published]
 
 permissions:
   contents: read
