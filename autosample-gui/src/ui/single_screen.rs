@@ -264,9 +264,14 @@ fn show_run_with_start_gate(
         ui.add_space(10.0);
     }
 
-    const LOG_PANEL_HEIGHT: f32 = 280.0;
+    const LOG_PANEL_MAX_HEIGHT: f32 = 280.0;
+    const LOG_PANEL_MIN_HEIGHT: f32 = 140.0;
+    const LOG_CHROME_HEIGHT: f32 = 56.0;
+    let log_panel_height = ui
+        .available_height()
+        .clamp(LOG_PANEL_MIN_HEIGHT, LOG_PANEL_MAX_HEIGHT);
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), LOG_PANEL_HEIGHT),
+        egui::vec2(ui.available_width(), log_panel_height),
         egui::Layout::top_down(egui::Align::Min),
         |ui| {
             ui.group(|ui| {
@@ -286,7 +291,7 @@ fn show_run_with_start_gate(
                 ui.add_space(5.0);
 
                 egui::ScrollArea::vertical()
-                    .max_height(LOG_PANEL_HEIGHT - 56.0)
+                    .max_height((log_panel_height - LOG_CHROME_HEIGHT).max(48.0))
                     .stick_to_bottom(true)
                     .show(ui, |ui| {
                         for log in &state.logs {
