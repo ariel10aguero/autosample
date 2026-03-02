@@ -2,20 +2,23 @@ use crate::audio::{find_audio_device, start_audio_capture};
 use crate::dsp::{apply_fade, get_peak_db, normalize_audio, trim_silence};
 use crate::export::{check_ffmpeg_available, convert_to_mp3, write_wav};
 use crate::midi::{
-    connect_midi_output, find_midi_port, send_all_notes_off, send_note_off, send_note_on,
+    connect_midi_output_by_name, send_all_notes_off, send_note_off, send_note_off_channel,
+    send_note_on, send_note_on_channel,
 };
 use crate::parse::{parse_notes, parse_velocities};
 use crate::ringbuf::{consume_audio_packets, RingBuffer};
 use crate::types::*;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, Sender};
 use hound::WavSpec;
+use midir::MidiOutputConnection;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
+use tracing::warn;
 
 pub struct AutosampleEngine {
     cancel_flag: Arc<AtomicBool>,
@@ -37,7 +40,61 @@ impl AutosampleEngine {
         config: RunConfig,
         progress_tx: Sender<ProgressUpdate>,
     ) -> Result<SessionMetadata> {
+        self.run_internal(config, progress_tx, None, None)
+    }
+
+    pub fn run_with_connected_midi(
+        &mut self,
+        config: RunConfig,
+        progress_tx: Sender<ProgressUpdate>,
+        midi_conn: MidiOutputConnection,
+        connected_port_name: String,
+        available_ports: Vec<String>,
+    ) -> Result<SessionMetadata> {
+        self.run_internal(
+            config,
+            progress_tx,
+            Some((midi_conn, connected_port_name, available_ports)),
+            None,
+        )
+    }
+
+    pub fn run_with_connected_midi_and_cancel(
+        &mut self,
+        config: RunConfig,
+        progress_tx: Sender<ProgressUpdate>,
+        midi_conn: MidiOutputConnection,
+        connected_port_name: String,
+        available_ports: Vec<String>,
+        external_cancel: Arc<AtomicBool>,
+    ) -> Result<SessionMetadata> {
+        self.run_internal(
+            config,
+            progress_tx,
+            Some((midi_conn, connected_port_name, available_ports)),
+            Some(external_cancel),
+        )
+    }
+
+    fn run_internal(
+        &mut self,
+        config: RunConfig,
+        progress_tx: Sender<ProgressUpdate>,
+        preconnected_midi: Option<(MidiOutputConnection, String, Vec<String>)>,
+        external_cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<SessionMetadata> {
         self.cancel_flag.store(false, Ordering::SeqCst);
+        if let Some(external) = &external_cancel {
+            external.store(false, Ordering::SeqCst);
+        }
+
+        let is_cancelled = || {
+            self.cancel_flag.load(Ordering::SeqCst)
+                || external_cancel
+                    .as_ref()
+                    .map(|flag| flag.load(Ordering::SeqCst))
+                    .unwrap_or(false)
+        };
 
         // Validate ffmpeg if needed
         let format = OutputFormat::from_str(&config.format)?;
@@ -69,12 +126,27 @@ impl AutosampleEngine {
         });
 
         // Connect MIDI
-        let midi_port = find_midi_port(&config.midi_out)?;
-        let mut midi_conn = connect_midi_output(midi_port)?;
+        let (mut midi_conn, connected_port_name, available_ports) = if let Some(existing) =
+            preconnected_midi
+        {
+            existing
+        } else {
+            let _ = progress_tx.send(ProgressUpdate::Log {
+                level: LogLevel::Info,
+                message: format!("Initializing MIDI output '{}'", config.midi_out),
+            });
+            connect_midi_output_by_name(&config.midi_out).with_context(|| {
+                format!("MIDI output initialization/connection failed for '{}'", config.midi_out)
+            })?
+        };
 
         let _ = progress_tx.send(ProgressUpdate::Log {
             level: LogLevel::Info,
-            message: format!("Connected to MIDI: {}", config.midi_out),
+            message: format!("Connected to MIDI: {}", connected_port_name),
+        });
+        let _ = progress_tx.send(ProgressUpdate::Log {
+            level: LogLevel::Info,
+            message: format!("MIDI ports at connect time: {}", available_ports.join(", ")),
         });
 
         // Setup audio capture
@@ -119,8 +191,9 @@ impl AutosampleEngine {
         };
 
         // Main sampling loop
+        let mut warned_about_silent_input = false;
         for (idx, job) in jobs.iter().enumerate() {
-            if self.cancel_flag.load(Ordering::SeqCst) {
+            if is_cancelled() {
                 let _ = progress_tx.send(ProgressUpdate::Cancelled);
                 break;
             }
@@ -134,7 +207,14 @@ impl AutosampleEngine {
             });
 
             // Check if file exists and resume mode is enabled
-            let wav_path = build_file_path(&output_dir, &config.prefix, job, "wav");
+            let wav_path = build_file_path(
+                &output_dir,
+                &config.prefix,
+                config.output_organization,
+                job,
+                "wav",
+                config.round_robin > 1,
+            );
             if config.resume && wav_path.exists() {
                 let _ = progress_tx.send(ProgressUpdate::SampleSkipped {
                     index: idx + 1,
@@ -157,11 +237,33 @@ impl AutosampleEngine {
                 &config,
                 sample_rate,
                 channels,
+                &is_cancelled,
             ) {
                 Ok(samples) => {
                     // Process the audio
                     let processed = process_audio(&samples, &config, channels);
                     let peak_db = get_peak_db(&processed);
+
+                    // Avoid exporting empty/silent captures. This usually means no audio
+                    // signal is reaching the selected input device.
+                    if peak_db <= -90.0 {
+                        if !warned_about_silent_input {
+                            warned_about_silent_input = true;
+                            let _ = progress_tx.send(ProgressUpdate::Log {
+                                level: LogLevel::Error,
+                                message: format!(
+                                    "No input signal detected on audio device '{}'. Check cabling, input gain/monitoring, and macOS microphone permission for this app/terminal.",
+                                    config.audio_in
+                                ),
+                            });
+                        }
+                        let _ = progress_tx.send(ProgressUpdate::SampleFailed {
+                            index: idx + 1,
+                            total: total_jobs,
+                            error: "Captured silence (-inf dB). Sample was not exported.".to_string(),
+                        });
+                        continue;
+                    }
 
                     // Export
                     if let Err(e) = export_sample(
@@ -197,6 +299,10 @@ impl AutosampleEngine {
                     }
                 }
                 Err(e) => {
+                    if is_cancelled() {
+                        let _ = progress_tx.send(ProgressUpdate::Cancelled);
+                        break;
+                    }
                     let _ = progress_tx.send(ProgressUpdate::SampleFailed {
                         index: idx + 1,
                         total: total_jobs,
@@ -248,6 +354,101 @@ fn capture_sample(
     config: &RunConfig,
     sample_rate: u32,
     channels: u16,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<f32>> {
+    const SILENT_CAPTURE_DB: f32 = -90.0;
+
+    let first_pass = capture_sample_with_trigger(
+        midi_conn,
+        receiver,
+        ring,
+        job,
+        config,
+        sample_rate,
+        channels,
+        is_cancelled,
+        MidiTriggerMode::Channel1,
+    )?;
+    let first_peak = get_peak_db(&first_pass);
+    if first_peak > SILENT_CAPTURE_DB {
+        return Ok(first_pass);
+    }
+    warn!(
+        "Captured silence on channel 1 for note {} vel {}; retrying on all MIDI channels",
+        job.note, job.velocity
+    );
+
+    // Some synths are configured to listen on a non-default MIDI channel.
+    // If the first pass is silent, retry by broadcasting on all channels.
+    let fallback_pass = capture_sample_with_trigger(
+        midi_conn,
+        receiver,
+        ring,
+        job,
+        config,
+        sample_rate,
+        channels,
+        is_cancelled,
+        MidiTriggerMode::AllChannels,
+    )?;
+
+    let fallback_peak = get_peak_db(&fallback_pass);
+    if fallback_peak > first_peak {
+        Ok(fallback_pass)
+    } else {
+        Ok(first_pass)
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MidiTriggerMode {
+    Channel1,
+    AllChannels,
+}
+
+fn send_note_on_with_mode(
+    midi_conn: &mut midir::MidiOutputConnection,
+    note: u8,
+    velocity: u8,
+    mode: MidiTriggerMode,
+) -> Result<()> {
+    match mode {
+        MidiTriggerMode::Channel1 => send_note_on(midi_conn, note, velocity),
+        MidiTriggerMode::AllChannels => {
+            for channel in 0u8..16 {
+                send_note_on_channel(midi_conn, note, velocity, channel)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn send_note_off_with_mode(
+    midi_conn: &mut midir::MidiOutputConnection,
+    note: u8,
+    mode: MidiTriggerMode,
+) -> Result<()> {
+    match mode {
+        MidiTriggerMode::Channel1 => send_note_off(midi_conn, note),
+        MidiTriggerMode::AllChannels => {
+            for channel in 0u8..16 {
+                send_note_off_channel(midi_conn, note, channel)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn capture_sample_with_trigger(
+    midi_conn: &mut midir::MidiOutputConnection,
+    receiver: &Receiver<Vec<f32>>,
+    ring: &mut RingBuffer,
+    job: &SampleJob,
+    config: &RunConfig,
+    sample_rate: u32,
+    channels: u16,
+    is_cancelled: &dyn Fn() -> bool,
+    trigger_mode: MidiTriggerMode,
 ) -> Result<Vec<f32>> {
     let preroll_samples =
         (sample_rate as usize * channels as usize * config.preroll_ms as usize) / 1000;
@@ -261,22 +462,34 @@ fn capture_sample(
 
     let preroll_start = std::time::Instant::now();
     while preroll_start.elapsed() < Duration::from_millis(config.preroll_ms as u64) {
+        if is_cancelled() {
+            anyhow::bail!("Capture cancelled");
+        }
         consume_audio_packets(receiver, ring);
         thread::sleep(Duration::from_millis(1));
     }
 
-    send_note_on(midi_conn, job.note, job.velocity)?;
+    send_note_on_with_mode(midi_conn, job.note, job.velocity, trigger_mode)?;
 
     let hold_start = std::time::Instant::now();
     while hold_start.elapsed() < Duration::from_millis(config.hold_ms as u64) {
+        if is_cancelled() {
+            let _ = send_note_off_with_mode(midi_conn, job.note, trigger_mode);
+            let _ = send_all_notes_off(midi_conn);
+            anyhow::bail!("Capture cancelled");
+        }
         consume_audio_packets(receiver, ring);
         thread::sleep(Duration::from_millis(1));
     }
 
-    send_note_off(midi_conn, job.note)?;
+    send_note_off_with_mode(midi_conn, job.note, trigger_mode)?;
 
     let tail_start = std::time::Instant::now();
     while tail_start.elapsed() < Duration::from_millis(config.tail_ms as u64) {
+        if is_cancelled() {
+            let _ = send_all_notes_off(midi_conn);
+            anyhow::bail!("Capture cancelled");
+        }
         consume_audio_packets(receiver, ring);
         thread::sleep(Duration::from_millis(1));
     }
@@ -315,7 +528,14 @@ fn export_sample(
     needs_mp3: bool,
     format: OutputFormat,
 ) -> Result<()> {
-    let wav_path = build_file_path(output_dir, &config.prefix, job, "wav");
+    let wav_path = build_file_path(
+        output_dir,
+        &config.prefix,
+        config.output_organization,
+        job,
+        "wav",
+        config.round_robin > 1,
+    );
 
     if let Some(parent) = wav_path.parent() {
         fs::create_dir_all(parent)?;
@@ -331,7 +551,14 @@ fn export_sample(
     write_wav(&wav_path, samples, spec)?;
 
     if needs_mp3 {
-        let mp3_path = build_file_path(output_dir, &config.prefix, job, "mp3");
+        let mp3_path = build_file_path(
+            output_dir,
+            &config.prefix,
+            config.output_organization,
+            job,
+            "mp3",
+            config.round_robin > 1,
+        );
         let _ = convert_to_mp3(&wav_path, &mp3_path);
 
         if format == OutputFormat::Mp3 {
@@ -345,15 +572,48 @@ fn export_sample(
 fn build_file_path(
     output_dir: &PathBuf,
     prefix: &str,
+    organization: OutputOrganization,
     job: &SampleJob,
     extension: &str,
+    include_round_robin_suffix: bool,
+) -> PathBuf {
+    let sample_dir = build_sample_dir(output_dir, organization, job);
+    let filename = build_sample_filename(prefix, job, extension, include_round_robin_suffix);
+    sample_dir.join(filename)
+}
+
+fn build_sample_dir(
+    output_dir: &PathBuf,
+    organization: OutputOrganization,
+    job: &SampleJob,
 ) -> PathBuf {
     let note_name = midi_note_to_name(job.note);
-    let filename = format!(
-        "{}_{}_{:03}_vel{:03}_rr{:02}.{}",
-        prefix, note_name, job.note, job.velocity, job.rr_index, extension
-    );
-    output_dir.join("samples").join(filename)
+    let note_dir = note_name;
+
+    match organization {
+        OutputOrganization::Flat => output_dir.clone(),
+        OutputOrganization::ByNote => output_dir.join(note_dir),
+    }
+}
+
+fn build_sample_filename(
+    prefix: &str,
+    job: &SampleJob,
+    extension: &str,
+    include_round_robin_suffix: bool,
+) -> String {
+    let note_name = midi_note_to_name(job.note);
+    if include_round_robin_suffix {
+        format!(
+            "{}_{}_vel{:03}_rr{:02}.{}",
+            prefix, note_name, job.velocity, job.rr_index, extension
+        )
+    } else {
+        format!(
+            "{}_{}_vel{:03}.{}",
+            prefix, note_name, job.velocity, extension
+        )
+    }
 }
 
 fn midi_note_to_name(note: u8) -> String {

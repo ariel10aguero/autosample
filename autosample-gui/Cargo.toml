@@ -20,6 +20,12 @@ crossbeam-channel = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
+midir = { workspace = true }
+rfd = "0.14"
+egui_extras = { version = "0.29", features = ["image"] }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winres = "0.1"
+
+[package.metadata.bundle]
+osx_info_plist_ext = { NSMicrophoneUsageDescription = "Autosample needs microphone access to record audio from your selected input device." }

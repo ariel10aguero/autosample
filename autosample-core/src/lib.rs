@@ -14,8 +14,8 @@ pub mod types;
 
 // Re-export commonly used types
 pub use types::{
-    AudioDeviceInfo, EngineStatus, LogLevel, MidiPortInfo, OutputFormat, ProgressUpdate,
-    RunConfig, SampleInfo, SampleJob, SessionMetadata,
+    AudioDeviceInfo, EngineStatus, LogLevel, MidiPortInfo, OutputFormat, OutputOrganization,
+    ProgressUpdate, RunConfig, SampleInfo, SampleJob, SessionMetadata,
 };
 
 pub use audio::{find_audio_device, get_audio_devices, list_audio_devices};

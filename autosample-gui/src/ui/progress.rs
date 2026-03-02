@@ -7,6 +7,7 @@ pub enum RunCommand {
     Start,
     Stop,
     ClearLogs,
+    ClearProject,
 }
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) -> Option<RunCommand> {

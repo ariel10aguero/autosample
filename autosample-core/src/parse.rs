@@ -11,6 +11,14 @@ pub fn parse_notes(input: &str) -> Result<Vec<u8>> {
         }
         let start = note_name_to_midi(parts[0])?;
         let end = note_name_to_midi(parts[1])?;
+        if start > end {
+            anyhow::bail!(
+                "Invalid note range '{}': descending ranges are not supported (start {} > end {})",
+                input,
+                start,
+                end
+            );
+        }
         return Ok((start..=end).collect());
     }
 
@@ -45,6 +53,9 @@ pub fn parse_velocities(input: &str) -> Result<Vec<u8>> {
         }
         let end: u8 = rest[0].parse()?;
         let step: u8 = rest[1].parse()?;
+        if step == 0 {
+            anyhow::bail!("Invalid velocity range format: step must be greater than zero");
+        }
 
         let mut velocities = Vec::new();
         if start > end {
@@ -82,6 +93,12 @@ pub fn parse_velocities(input: &str) -> Result<Vec<u8>> {
         }
         let start: u8 = parts[0].parse()?;
         let end: u8 = parts[1].parse()?;
+        if start > end {
+            anyhow::bail!(
+                "Invalid velocity range '{}': descending range requires a step (example: 127..1:8)",
+                input
+            );
+        }
         return Ok((start..=end).collect());
     }
 
@@ -102,22 +119,32 @@ pub fn parse_velocities(input: &str) -> Result<Vec<u8>> {
 
 fn note_name_to_midi(name: &str) -> Result<u8> {
     let name = name.trim().to_uppercase();
+    if name.is_empty() {
+        anyhow::bail!("Invalid note name: empty input");
+    }
 
-    // Parse note name and octave
-    let note_part = if name.len() >= 2
-        && (name.chars().nth(1) == Some('#') || name.chars().nth(1) == Some('S'))
-    {
-        &name[..2]
-    } else {
-        &name[..1]
-    };
+    // Parse note name and octave without byte indexing so malformed input
+    // cannot panic during intermediate UI validation.
+    let mut chars = name.chars();
+    let first = chars
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("Invalid note name: empty input"))?;
+    let second = chars.next();
 
-    let octave_part = &name[note_part.len()..];
+    let mut note_part = first.to_string();
+    let mut octave_start = first.len_utf8();
+    if matches!(second, Some('#' | 'S' | 'B')) {
+        let accidental = second.unwrap_or_default();
+        note_part.push(accidental);
+        octave_start += accidental.len_utf8();
+    }
+
+    let octave_part = &name[octave_start..];
     let octave: i32 = octave_part
         .parse()
         .map_err(|_| anyhow::anyhow!("Invalid octave in note: {}", name))?;
 
-    let pitch = match note_part {
+    let pitch = match note_part.as_str() {
         "C" => 0,
         "C#" | "CS" | "DB" => 1,
         "D" => 2,
@@ -159,9 +186,21 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_note_range_descending_fails() {
+        let err = parse_notes("E4..C4").unwrap_err();
+        assert!(err.to_string().contains("descending ranges are not supported"));
+    }
+
+    #[test]
     fn test_parse_note_list() {
         let notes = parse_notes("C4,E4,G4").unwrap();
         assert_eq!(notes, vec![60, 64, 67]);
+    }
+
+    #[test]
+    fn test_parse_note_empty_token_fails() {
+        assert!(parse_notes("C4,,E4").is_err());
+        assert!(parse_notes("C4..").is_err());
     }
 
     #[test]
@@ -176,5 +215,17 @@ mod tests {
     fn test_parse_velocities_list() {
         let vels = parse_velocities("127,100,64").unwrap();
         assert_eq!(vels, vec![127, 100, 64]);
+    }
+
+    #[test]
+    fn test_parse_velocity_range_descending_without_step_fails() {
+        let err = parse_velocities("127..64").unwrap_err();
+        assert!(err.to_string().contains("descending range requires a step"));
+    }
+
+    #[test]
+    fn test_parse_velocity_range_step_zero_fails() {
+        let err = parse_velocities("127..1:0").unwrap_err();
+        assert!(err.to_string().contains("step must be greater than zero"));
     }
 }

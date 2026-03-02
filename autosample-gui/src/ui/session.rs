@@ -1,113 +1,140 @@
+// src/ui/session.rs
 use crate::state::AppState;
+use autosample_core::OutputOrganization;
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    ui.heading("🎹 Session Configuration");
+    // NOTE: no ScrollArea here (sidebar owns scrolling)
+    let help_label_color = egui::Color32::from_rgb(220, 230, 255);
+
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Note Range").strong().size(16.0));
+        ui.add_space(5.0);
+
+        ui.label(egui::RichText::new("Range: C2..C6 | List: C4,E4,G4 | Single: A4").weak());
+        ui.text_edit_singleline(&mut state.config.notes);
+    });
+
     ui.add_space(10.0);
 
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        // Notes
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Note Range").strong().size(16.0));
-            ui.add_space(5.0);
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Velocity Layers").strong().size(16.0));
+        ui.add_space(5.0);
 
-            ui.label("Examples: C2..C6, C4,E4,G4, A4");
-            ui.text_edit_singleline(&mut state.config.notes);
-        });
+        ui.label(
+            egui::RichText::new("Step: 127..15:16 | List: 127,100,64 | Single: 100").weak(),
+        );
+        ui.text_edit_singleline(&mut state.config.vel);
+    });
 
-        ui.add_space(10.0);
+    ui.add_space(10.0);
 
-        // Velocities
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Velocity Layers").strong().size(16.0));
-            ui.add_space(5.0);
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Timing").strong().size(16.0));
+        ui.add_space(5.0);
 
-            ui.label("Examples: 127..1:16, 127,100,64, 127");
-            ui.text_edit_singleline(&mut state.config.vel);
-        });
-
-        ui.add_space(10.0);
-
-        // Timing
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Timing").strong().size(16.0));
-            ui.add_space(5.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Preroll:");
+        egui::Grid::new("timing_grid")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Preroll:").color(help_label_color))
+                    .on_hover_text("Wait time before recording starts after sending the MIDI note.")
+                    .on_hover_cursor(egui::CursorIcon::Help);
                 ui.add(egui::DragValue::new(&mut state.config.preroll_ms).suffix(" ms"));
-            });
+                ui.end_row();
 
-            ui.horizontal(|ui| {
-                ui.label("Hold Duration:");
+                ui.label(egui::RichText::new("Hold:").color(help_label_color))
+                    .on_hover_text("How long the MIDI note stays pressed before note-off.")
+                    .on_hover_cursor(egui::CursorIcon::Help);
                 ui.add(egui::DragValue::new(&mut state.config.hold_ms).suffix(" ms"));
-            });
+                ui.end_row();
 
-            ui.horizontal(|ui| {
-                ui.label("Tail Duration:");
+                ui.label(egui::RichText::new("Tail:").color(help_label_color))
+                    .on_hover_text("Extra recording time after note-off to capture release/decay.")
+                    .on_hover_cursor(egui::CursorIcon::Help);
                 ui.add(egui::DragValue::new(&mut state.config.tail_ms).suffix(" ms"));
+                ui.end_row();
             });
+    });
+
+    ui.add_space(10.0);
+
+    ui.group(|ui| {
+        ui.label(
+            egui::RichText::new("Round Robin")
+                .strong()
+                .size(16.0)
+                .color(help_label_color),
+        )
+        .on_hover_text("Number of takes per note/velocity for variation.")
+        .on_hover_cursor(egui::CursorIcon::Help);
+        ui.add_space(5.0);
+
+        ui.horizontal(|ui| {
+            ui.label("Takes:");
+            ui.add(egui::DragValue::new(&mut state.config.round_robin).range(1..=10));
         });
+    });
 
-        ui.add_space(10.0);
+}
 
-        // Round Robin
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Round Robin").strong().size(16.0));
-            ui.add_space(5.0);
+pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
+    ui.group(|ui| {
+        ui.label(egui::RichText::new("Output").strong().size(16.0));
+        ui.add_space(5.0);
 
-            ui.horizontal(|ui| {
-                ui.label("Takes per note/velocity:");
-                ui.add(
-                    egui::DragValue::new(&mut state.config.round_robin).clamp_range(1..=10),
-                );
-            });
-        });
-
-        ui.add_space(10.0);
-
-        // Output
-        ui.group(|ui| {
-            ui.label(egui::RichText::new("Output").strong().size(16.0));
-            ui.add_space(5.0);
-
-            ui.horizontal(|ui| {
-                ui.label("Output Directory:");
-                ui.text_edit_singleline(&mut state.config.output);
-                if ui.button("📁").clicked() {
-                    // TODO: Directory picker
+        ui.horizontal(|ui| {
+            ui.label("Directory:");
+            ui.text_edit_singleline(&mut state.config.output);
+            if ui.button("📁").on_hover_text("Choose output directory").clicked() {
+                if let Some(path) = rfd::FileDialog::new().pick_folder() {
+                    state.config.output = path.display().to_string();
                 }
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Prefix:");
-                ui.text_edit_singleline(&mut state.config.prefix);
-            });
-
-            ui.horizontal(|ui| {
-                ui.label("Format:");
-                egui::ComboBox::from_id_salt("format")
-                    .selected_text(&state.config.format)
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(
-                            &mut state.config.format,
-                            "wav".to_string(),
-                            "WAV",
-                        );
-                        ui.selectable_value(
-                            &mut state.config.format,
-                            "mp3".to_string(),
-                            "MP3",
-                        );
-                        ui.selectable_value(
-                            &mut state.config.format,
-                            "both".to_string(),
-                            "Both",
-                        );
-                    });
-            });
-
-            ui.checkbox(&mut state.config.resume, "Resume (skip existing files)");
+            }
         });
+
+        let name_preview = if state.preset_name.trim().is_empty() {
+            "Untitled"
+        } else {
+            state.preset_name.as_str()
+        };
+        ui.label(
+            egui::RichText::new(format!("File name prefix: {}", name_preview))
+                .weak()
+                .monospace(),
+        );
+
+        ui.label("Organization:");
+        ui.horizontal(|ui| {
+            ui.radio_value(
+                &mut state.config.output_organization,
+                OutputOrganization::Flat,
+                "Flat",
+            );
+            ui.radio_value(
+                &mut state.config.output_organization,
+                OutputOrganization::ByNote,
+                "By Note",
+            );
+        });
+
+        let path_preview = match state.config.output_organization {
+            OutputOrganization::Flat => "output/<preset_name>/<file>.wav",
+            OutputOrganization::ByNote => "output/<preset_name>/<NoteName_Midi>/<file>.wav",
+        };
+        ui.label(egui::RichText::new(path_preview).weak().monospace());
+
+        ui.horizontal(|ui| {
+            ui.label("Format:");
+            egui::ComboBox::from_id_salt("format")
+                .selected_text(&state.config.format)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut state.config.format, "wav".to_string(), "WAV");
+                    ui.selectable_value(&mut state.config.format, "mp3".to_string(), "MP3");
+                    ui.selectable_value(&mut state.config.format, "both".to_string(), "Both");
+                });
+        });
+
+        ui.checkbox(&mut state.config.resume, "Resume (skip existing files)");
     });
 }
