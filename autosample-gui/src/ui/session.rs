@@ -11,7 +11,18 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         ui.label(egui::RichText::new("Note Range").strong().size(16.0));
         ui.add_space(5.0);
 
-        ui.label(egui::RichText::new("Range: C2..C6 | List: C4,E4,G4 | Single: A4").weak());
+        ui.label(
+            egui::RichText::new("Range: C2..C6 | List: C4,E4,G4 | Single: A4")
+                .color(help_label_color),
+        )
+        .on_hover_text(
+            "Range uses start..end and is ascending only.\n\
+             Example: C2..C6 includes every semitone from C2 to C6.\n\
+             List uses comma-separated notes (example: C4,E4,G4).\n\
+             Single uses one note (example: A4).\n\
+             Use # or b for accidentals in input (example: C#4, Db4).",
+        )
+        .on_hover_cursor(egui::CursorIcon::Help);
         ui.text_edit_singleline(&mut state.config.notes);
     });
 
@@ -22,8 +33,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         ui.add_space(5.0);
 
         ui.label(
-            egui::RichText::new("Step: 127..15:16 | List: 127,100,64 | Single: 100").weak(),
-        );
+            egui::RichText::new("Step: 127..15:16 | List: 127,100,64 | Single: 100")
+                .color(help_label_color),
+        )
+        .on_hover_text(
+            "Use start..end:step.\n\
+             Example: 127..15:16 means start at 127, go down by 16 each layer,\n\
+             and stop at or above 15.\n\
+             Result: 127,111,95,79,63,47,31,15.",
+        )
+        .on_hover_cursor(egui::CursorIcon::Help);
         ui.text_edit_singleline(&mut state.config.vel);
     });
 
