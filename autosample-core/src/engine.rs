@@ -588,7 +588,7 @@ fn build_sample_dir(
     job: &SampleJob,
 ) -> PathBuf {
     let note_name = midi_note_to_name(job.note);
-    let note_dir = format!("{}_{:03}", note_name, job.note);
+    let note_dir = note_name;
 
     match organization {
         OutputOrganization::Flat => output_dir.clone(),
