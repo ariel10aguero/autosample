@@ -3,7 +3,7 @@ mod cli;
 use anyhow::Result;
 use autosample_core::{audio, midi, AutosampleEngine, LogLevel, ProgressUpdate, RunConfig};
 use clap::Parser;
-use cli::{Cli, Commands, RunConfigArgs};
+use cli::{Cli, Commands};
 use crossbeam_channel::unbounded;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
