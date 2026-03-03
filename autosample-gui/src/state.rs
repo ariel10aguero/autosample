@@ -33,11 +33,9 @@ pub struct AppState {
 
     // Device scan state
     pub device_scan_state: DeviceScanState,
-
-    // Tracks when the last scan finished so start_session() can enforce a
-    // CoreMIDI settle delay without blocking the UI thread.
     pub last_scan_completed_at: Option<Instant>,
 
+    // Private channels / flags
     device_scan_rx: Option<Receiver<device_scan::DeviceScanOutcome>>,
     pending_midi_scan_error: Option<String>,
     audio_permission_recheck_requested: bool,
@@ -130,24 +128,23 @@ impl AppState {
             return;
         }
 
+        tracing::info!("Requesting device scan");
         let preferred_midi = self.config.midi_out.trim().to_string();
         self.pending_midi_scan_error = None;
 
-        // MIDI scan on the app thread using the port cache in midi.rs.
-        // The warmup client (created in App::new) keeps the CoreMIDI session
-        // live, so this call is unlikely to fail.
+        // MIDI scan on the app thread — uses the cached port list from midi.rs.
         match autosample_core::midi::get_midi_ports() {
             Ok(midi_devices) => {
                 self.apply_midi_scan_result(midi_devices, &preferred_midi);
             }
-            Err(error) => {
-                let message = format!("MIDI scan failed: {}", error);
-                self.pending_midi_scan_error = Some(message.clone());
-                self.add_log(LogLevel::Warning, message);
+            Err(e) => {
+                let msg = format!("MIDI scan failed: {}", e);
+                self.pending_midi_scan_error = Some(msg.clone());
+                self.add_log(LogLevel::Warning, msg);
             }
         }
 
-        // Audio scan runs in a background thread (unchanged).
+        // Audio scan runs in a background thread.
         self.device_scan_state = DeviceScanState::Scanning;
         self.device_scan_rx = Some(device_scan::spawn_device_scan());
         self.add_log(
@@ -156,10 +153,11 @@ impl AppState {
         );
     }
 
-    /// Call this every frame from `eframe::App::update`.
+    /// Must be called every frame from `eframe::App::update`.
     pub fn poll_device_scan_result(&mut self) {
-        let Some(rx) = self.device_scan_rx.clone() else {
-            return;
+        let rx = match self.device_scan_rx.clone() {
+            Some(r) => r,
+            None => return,
         };
 
         match rx.try_recv() {
@@ -171,13 +169,14 @@ impl AppState {
                     Ok(result) => {
                         self.apply_audio_scan_result(result);
 
-                        if let Some(error) = self.pending_midi_scan_error.take() {
-                            self.device_scan_state = DeviceScanState::Failed(error.clone());
+                        if let Some(midi_err) = self.pending_midi_scan_error.take() {
+                            self.device_scan_state =
+                                DeviceScanState::Failed(midi_err.clone());
                             self.add_log(
                                 LogLevel::Warning,
                                 format!(
                                     "Device refresh completed with warnings: {}",
-                                    error
+                                    midi_err
                                 ),
                             );
                         } else {
@@ -192,15 +191,16 @@ impl AppState {
                             );
                         }
                     }
-                    Err(error) => {
+                    Err(audio_err) => {
                         let combined = if let Some(midi_err) =
                             self.pending_midi_scan_error.take()
                         {
-                            format!("{}; {}", midi_err, error)
+                            format!("{}; {}", midi_err, audio_err)
                         } else {
-                            error
+                            audio_err
                         };
-                        self.device_scan_state = DeviceScanState::Failed(combined.clone());
+                        self.device_scan_state =
+                            DeviceScanState::Failed(combined.clone());
                         self.add_log(
                             LogLevel::Warning,
                             format!("Device refresh failed: {}", combined),
@@ -215,7 +215,7 @@ impl AppState {
                 self.device_scan_rx = None;
                 self.last_scan_completed_at = Some(Instant::now());
 
-                let mut error = "Device refresh worker disconnected".to_string();
+                let mut error = "Device refresh worker disconnected unexpectedly".to_string();
                 if let Some(midi_err) = self.pending_midi_scan_error.take() {
                     error = format!("{}; {}", midi_err, error);
                 }
@@ -244,9 +244,9 @@ impl AppState {
     }
 
     pub fn consume_audio_permission_recheck_requested(&mut self) -> bool {
-        let requested = self.audio_permission_recheck_requested;
+        let was = self.audio_permission_recheck_requested;
         self.audio_permission_recheck_requested = false;
-        requested
+        was
     }
 
     // -----------------------------------------------------------------------
@@ -255,7 +255,6 @@ impl AppState {
 
     fn apply_audio_scan_result(&mut self, result: DeviceScanResult) {
         let preferred_audio = self.config.audio_in.trim().to_string();
-
         self.audio_devices = result.audio_devices;
         self.selected_audio_idx = Self::resolve_selection_index(
             &preferred_audio,
@@ -272,7 +271,11 @@ impl AppState {
         }
     }
 
-    fn apply_midi_scan_result(&mut self, midi_devices: Vec<MidiPortInfo>, preferred_midi: &str) {
+    fn apply_midi_scan_result(
+        &mut self,
+        midi_devices: Vec<MidiPortInfo>,
+        preferred_midi: &str,
+    ) {
         self.midi_devices = midi_devices;
         self.selected_midi_idx = Self::resolve_selection_index(
             preferred_midi,
@@ -289,7 +292,11 @@ impl AppState {
         }
     }
 
-    fn resolve_selection_index<T, F>(preferred: &str, devices: &[T], get_name: F) -> Option<usize>
+    fn resolve_selection_index<T, F>(
+        preferred: &str,
+        devices: &[T],
+        get_name: F,
+    ) -> Option<usize>
     where
         F: Fn(&T) -> &str,
     {
@@ -310,12 +317,17 @@ impl AppState {
     // -----------------------------------------------------------------------
 
     pub fn add_log(&mut self, level: LogLevel, message: String) {
+        tracing::debug!("[{:?}] {}", level, message);
         self.logs.push(LogEntry {
             timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
             level,
             message,
         });
     }
+
+    // -----------------------------------------------------------------------
+    // Audio permission state
+    // -----------------------------------------------------------------------
 
     pub fn set_audio_permission_checking(&mut self) {
         self.audio_permission_state = AudioInputPermissionState::Checking;
@@ -334,7 +346,10 @@ impl AppState {
     }
 
     pub fn audio_permission_is_granted(&self) -> bool {
-        matches!(self.audio_permission_state, AudioInputPermissionState::Granted)
+        matches!(
+            self.audio_permission_state,
+            AudioInputPermissionState::Granted
+        )
     }
 
     // -----------------------------------------------------------------------
@@ -408,7 +423,6 @@ impl AppState {
             .position(|d| d.name == self.config.audio_in);
 
         self.preset_name = self.config.prefix.clone();
-
         Ok(())
     }
 
