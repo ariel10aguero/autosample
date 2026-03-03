@@ -1,3 +1,4 @@
+# .github/workflows/build.yml
 name: Build (macOS + Windows + Linux)
 
 on:
@@ -14,12 +15,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, windows-latest, ubuntu-latest]
+        # macos-13 = Intel runner — reliable for building universal binaries
+        # because cross-compiling x86_64 -> aarch64 is easier than the reverse
+        # when audio/MIDI system frameworks are involved.
+        os: [macos-13, windows-latest, ubuntu-latest]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # -----------------------------------------------------------------------
+      # Linux system dependencies
+      # -----------------------------------------------------------------------
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -36,69 +43,149 @@ jobs:
             libwayland-dev \
             libgl1-mesa-dev
 
+      # -----------------------------------------------------------------------
+      # Rust toolchain
+      # -----------------------------------------------------------------------
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install macOS Rust targets
+      - name: Install macOS cross-compilation targets
         if: runner.os == 'macOS'
         run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
 
-      - name: Configure Windows runtime (static CRT)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+      # NOTE: Do NOT set +crt-static globally on Windows.
+      # cpal and the WASAPI backend require the dynamic CRT.
+      # The GUI subsystem is handled in source via:
+      #   #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+      # -----------------------------------------------------------------------
+      # Caching
+      # -----------------------------------------------------------------------
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: |
-            . -> target
+          workspaces: . -> target
 
+      # -----------------------------------------------------------------------
+      # Build — Linux / Windows (native, single target)
+      # -----------------------------------------------------------------------
       - name: Build workspace (release)
         if: runner.os != 'macOS'
         run: cargo build --release --workspace
 
-      - name: Build workspace (macOS x64 + arm64)
+      # -----------------------------------------------------------------------
+      # Build — macOS (two separate target passes, then lipo)
+      #
+      # We set MACOSX_DEPLOYMENT_TARGET per-step so that both slices use a
+      # consistent minimum OS version and the linker doesn't warn about
+      # mismatched LC_VERSION_MIN_MACOSX load commands.
+      # -----------------------------------------------------------------------
+      - name: Build macOS x86_64
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "10.15"
+        run: cargo build --release --workspace --target x86_64-apple-darwin
+
+      - name: Build macOS aarch64
+        if: runner.os == 'macOS'
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
+        run: cargo build --release --workspace --target aarch64-apple-darwin
+
+      - name: Verify macOS build outputs
         if: runner.os == 'macOS'
         run: |
-          cargo build --release --workspace --target x86_64-apple-darwin
-          cargo build --release --workspace --target aarch64-apple-darwin
+          echo "=== x86_64 ==="
+          ls -lh target/x86_64-apple-darwin/release/autosample
+          ls -lh target/x86_64-apple-darwin/release/autosample-gui
+          file target/x86_64-apple-darwin/release/autosample
+          file target/x86_64-apple-darwin/release/autosample-gui
 
-      - name: Install Windows bundling tools
+          echo "=== aarch64 ==="
+          ls -lh target/aarch64-apple-darwin/release/autosample
+          ls -lh target/aarch64-apple-darwin/release/autosample-gui
+          file target/aarch64-apple-darwin/release/autosample
+          file target/aarch64-apple-darwin/release/autosample-gui
+
+      - name: Create macOS universal binaries
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dist
+
+          lipo -create \
+            target/x86_64-apple-darwin/release/autosample \
+            target/aarch64-apple-darwin/release/autosample \
+            -output dist/autosample
+
+          lipo -create \
+            target/x86_64-apple-darwin/release/autosample-gui \
+            target/aarch64-apple-darwin/release/autosample-gui \
+            -output dist/autosample-gui
+
+          chmod +x dist/autosample dist/autosample-gui
+
+          echo "=== Universal binary verification ==="
+          lipo -info dist/autosample
+          lipo -info dist/autosample-gui
+          file dist/autosample
+          file dist/autosample-gui
+
+      - name: Package macOS artifacts
+        if: runner.os == 'macOS'
+        run: |
+          cd dist && zip -r "../autosample-macOS.zip" .
+          ls -lh ../autosample-macOS.zip
+
+      # -----------------------------------------------------------------------
+      # Windows — MSI installer via WiX v3
+      # -----------------------------------------------------------------------
+      - name: Install WiX Toolset
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           choco install wixtoolset --no-progress -y
-          $wixRoot = Get-ChildItem "${env:ProgramFiles(x86)}" -Directory | Where-Object Name -like "WiX Toolset v3*" | Sort-Object Name -Descending | Select-Object -First 1
-          if (-not $wixRoot) {
-            throw "WiX Toolset installation folder was not found."
-          }
-          $wixBin = Join-Path $wixRoot.FullName "bin"
-          "WIX=$wixBin" >> $env:GITHUB_ENV
-          "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
-      - name: Build Windows installer (MSI)
+          $wixRoot = Get-ChildItem "${env:ProgramFiles(x86)}" -Directory |
+            Where-Object { $_.Name -like "WiX Toolset v3*" } |
+            Sort-Object Name -Descending |
+            Select-Object -First 1
+
+          if (-not $wixRoot) {
+            throw "WiX Toolset v3 not found under Program Files (x86)."
+          }
+
+          $wixBin = Join-Path $wixRoot.FullName "bin"
+          Write-Host "WiX bin: $wixBin"
+
+          # Persist for subsequent steps
+          "WIX=$wixBin"    | Out-File -FilePath $env:GITHUB_ENV  -Encoding utf8 -Append
+          "$wixBin"        | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Build Windows MSI
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $tag = "${{ github.event.release.tag_name }}"
-          $version = $tag.TrimStart("v", "V")
-          if ($version -notmatch "^\d+\.\d+\.\d+(\.\d+)?$") {
+          # ── version string ──────────────────────────────────────────────
+          $tag     = "${{ github.event.release.tag_name }}"
+          $version = $tag -replace '^[vV]', ''
+          if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
             $version = "0.1.0.0"
-          } elseif ($version -match "^\d+\.\d+\.\d+$") {
+          } elseif ($version -match '^\d+\.\d+\.\d+$') {
             $version = "$version.0"
           }
+          Write-Host "MSI product version: $version"
 
-          New-Item -ItemType Directory -Force installer | Out-Null
+          # ── stage payload ────────────────────────────────────────────────
           New-Item -ItemType Directory -Force installer\payload | Out-Null
 
-          Copy-Item target\release\autosample-gui.exe installer\payload\autosample-gui.exe -Force
-          Copy-Item target\release\autosample.exe installer\payload\autosample.exe -Force
-          Get-ChildItem target\release\*.dll -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName installer\payload\ -Force
-          }
+          Copy-Item target\release\autosample-gui.exe installer\payload\ -Force
+          Copy-Item target\release\autosample.exe     installer\payload\ -Force
 
+          # Copy any side-by-side DLLs (e.g. from cpal/WASAPI)
+          Get-ChildItem target\release\*.dll -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName installer\payload\ -Force }
+
+          # ── WXS source ───────────────────────────────────────────────────
           $wxs = @"
           <?xml version="1.0" encoding="UTF-8"?>
           <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
@@ -109,10 +196,16 @@ jobs:
               Version="$version"
               Manufacturer="Autosample Team"
               UpgradeCode="B218DD76-F0E0-4E68-A0D2-A9F0277C2F0D">
-              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-              <MajorUpgrade DowngradeErrorMessage="A newer version of Autosample is already installed." />
+              <Package
+                InstallerVersion="500"
+                Compressed="yes"
+                InstallScope="perMachine" />
+              <MajorUpgrade
+                DowngradeErrorMessage="A newer version of Autosample is already installed." />
               <MediaTemplate EmbedCab="yes" />
-              <Icon Id="AutosampleIcon" SourceFile="installer\payload\autosample-gui.exe" />
+
+              <Icon Id="AutosampleIcon"
+                    SourceFile="installer\payload\autosample-gui.exe" />
               <Property Id="ARPPRODUCTICON" Value="AutosampleIcon" />
 
               <Feature Id="MainFeature" Title="Autosample" Level="1">
@@ -129,12 +222,13 @@ jobs:
                 <Directory Id="ProgramFiles64Folder">
                   <Directory Id="INSTALLDIR" Name="Autosample" />
                 </Directory>
+                <Directory Id="DesktopFolder" Name="Desktop" />
               </Directory>
             </Fragment>
 
             <Fragment>
               <ComponentGroup Id="ShortcutComponents" Directory="INSTALLDIR">
-                <Component Id="DesktopShortcutComponent" Guid="*">
+                <Component Id="DesktopShortcutComp" Guid="*">
                   <Shortcut
                     Id="DesktopShortcut"
                     Directory="DesktopFolder"
@@ -158,71 +252,104 @@ jobs:
           "@
 
           Set-Content -Path installer\autosample.wxs -Value $wxs -Encoding UTF8
-          heat.exe dir installer\payload -cg PayloadFiles -dr INSTALLDIR -gg -scom -sreg -sfrag -srd -out installer\payload.wxs
-          candle.exe -arch x64 installer\autosample.wxs installer\payload.wxs -out installer\
-          light.exe -ext WixUIExtension -cultures:en-us installer\autosample.wixobj installer\payload.wixobj -o autosample-Windows.msi
 
-      - name: Prepare artifacts (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          mkdir -p dist
-          lipo -create \
-            target/x86_64-apple-darwin/release/autosample \
-            target/aarch64-apple-darwin/release/autosample \
-            -output dist/autosample
-          lipo -create \
-            target/x86_64-apple-darwin/release/autosample-gui \
-            target/aarch64-apple-darwin/release/autosample-gui \
-            -output dist/autosample-gui
-          chmod +x dist/autosample dist/autosample-gui
-          (cd dist && zip -r "../autosample-macOS.zip" .)
+          # ── WiX pipeline ─────────────────────────────────────────────────
+          Write-Host "heat..."
+          heat.exe dir installer\payload `
+            -cg PayloadFiles `
+            -dr INSTALLDIR `
+            -gg -scom -sreg -sfrag -srd `
+            -out installer\payload.wxs
+          if ($LASTEXITCODE -ne 0) { throw "heat failed" }
 
-      - name: Prepare artifacts (Windows)
+          Write-Host "candle..."
+          candle.exe -arch x64 `
+            installer\autosample.wxs `
+            installer\payload.wxs `
+            -out installer\
+          if ($LASTEXITCODE -ne 0) { throw "candle failed" }
+
+          Write-Host "light..."
+          light.exe `
+            -ext WixUIExtension `
+            -cultures:en-us `
+            installer\autosample.wixobj `
+            installer\payload.wixobj `
+            -o autosample-Windows.msi
+          if ($LASTEXITCODE -ne 0) { throw "light failed" }
+
+          Write-Host "MSI ready:"
+          Get-Item autosample-Windows.msi | Select-Object Name, Length
+
+      # -----------------------------------------------------------------------
+      # Windows ZIP (portable, no installer needed)
+      # -----------------------------------------------------------------------
+      - name: Package Windows artifacts
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target\release\autosample.exe dist\autosample.exe
-          Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
+          Copy-Item target\release\autosample.exe     dist\
+          Copy-Item target\release\autosample-gui.exe dist\
           Compress-Archive -Path dist\* -DestinationPath autosample-Windows.zip -Force
 
-      - name: Prepare artifacts (Linux)
+      # -----------------------------------------------------------------------
+      # Linux ZIP
+      # -----------------------------------------------------------------------
+      - name: Package Linux artifacts
         if: runner.os == 'Linux'
         run: |
           mkdir -p dist
-          cp target/release/autosample dist/autosample
-          cp target/release/autosample-gui dist/autosample-gui
-          (cd dist && zip -r "../autosample-Linux.zip" .)
+          cp target/release/autosample     dist/
+          cp target/release/autosample-gui dist/
+          chmod +x dist/autosample dist/autosample-gui
+          cd dist && zip -r "../autosample-Linux.zip" .
 
-      - name: Upload build archive
-        if: runner.os != 'Windows'
+      # -----------------------------------------------------------------------
+      # Upload artifacts for the release-assets job
+      # -----------------------------------------------------------------------
+      - name: Upload macOS artifact
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: autosample-${{ runner.os }}
-          path: autosample-${{ runner.os }}.zip
+          name: autosample-macOS
+          path: autosample-macOS.zip
 
-      - name: Upload build artifacts (Windows)
+      - name: Upload Linux artifact
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosample-Linux
+          path: autosample-Linux.zip
+
+      - name: Upload Windows artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: autosample-${{ runner.os }}
+          name: autosample-Windows
           path: |
             autosample-Windows.zip
             autosample-Windows.msi
 
+  # ---------------------------------------------------------------------------
+  # Attach everything to the GitHub Release
+  # ---------------------------------------------------------------------------
   release-assets:
     name: Attach assets to GitHub Release
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download build archives
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: autosample-*
           merge-multiple: true
           path: release-assets
 
-      - name: Upload archives to release
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
