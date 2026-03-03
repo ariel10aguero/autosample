@@ -39,6 +39,12 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Configure Windows runtime (static CRT)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "RUSTFLAGS=-C target-feature=+crt-static" >> $env:GITHUB_ENV
+
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -53,18 +59,73 @@ jobs:
         shell: pwsh
         run: |
           choco install wixtoolset --no-progress -y
-          cargo install cargo-bundle --locked
+          $wixRoot = Get-ChildItem "${env:ProgramFiles(x86)}" -Directory | Where-Object Name -like "WiX Toolset v3*" | Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $wixRoot) {
+            throw "WiX Toolset installation folder was not found."
+          }
+          $wixBin = Join-Path $wixRoot.FullName "bin"
+          "WIX=$wixBin" >> $env:GITHUB_ENV
+          "$wixBin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build Windows installer (MSI)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo bundle -p autosample-gui --release --format msi
-          $msi = Get-ChildItem target\release\bundle\msi\*.msi | Select-Object -First 1
-          if (-not $msi) {
-            throw "MSI file was not generated."
+          $tag = "${{ github.event.release.tag_name }}"
+          $version = $tag.TrimStart("v", "V")
+          if ($version -notmatch "^\d+\.\d+\.\d+(\.\d+)?$") {
+            $version = "0.1.0.0"
+          } elseif ($version -match "^\d+\.\d+\.\d+$") {
+            $version = "$version.0"
           }
-          Copy-Item $msi.FullName autosample-Windows.msi -Force
+
+          New-Item -ItemType Directory -Force installer | Out-Null
+          $wxs = @"
+          <?xml version="1.0" encoding="UTF-8"?>
+          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+            <Product
+              Id="*"
+              Name="Autosample"
+              Language="1033"
+              Version="$version"
+              Manufacturer="Autosample Team"
+              UpgradeCode="B218DD76-F0E0-4E68-A0D2-A9F0277C2F0D">
+              <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
+              <MajorUpgrade DowngradeErrorMessage="A newer version of Autosample is already installed." />
+              <MediaTemplate EmbedCab="yes" />
+
+              <Feature Id="MainFeature" Title="Autosample" Level="1">
+                <ComponentGroupRef Id="AutosampleBinaries" />
+              </Feature>
+
+              <UIRef Id="WixUI_Minimal" />
+              <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+            </Product>
+
+            <Fragment>
+              <Directory Id="TARGETDIR" Name="SourceDir">
+                <Directory Id="ProgramFiles64Folder">
+                  <Directory Id="INSTALLDIR" Name="Autosample" />
+                </Directory>
+              </Directory>
+            </Fragment>
+
+            <Fragment>
+              <ComponentGroup Id="AutosampleBinaries" Directory="INSTALLDIR">
+                <Component Id="AutosampleGuiExe" Guid="*">
+                  <File Id="AutosampleGuiFile" Source="target\release\autosample-gui.exe" KeyPath="yes" />
+                </Component>
+                <Component Id="AutosampleCliExe" Guid="*">
+                  <File Id="AutosampleCliFile" Source="target\release\autosample.exe" KeyPath="yes" />
+                </Component>
+              </ComponentGroup>
+            </Fragment>
+          </Wix>
+          "@
+
+          Set-Content -Path installer\autosample.wxs -Value $wxs -Encoding UTF8
+          candle.exe -arch x64 installer\autosample.wxs -out installer\
+          light.exe -ext WixUIExtension -cultures:en-us installer\autosample.wixobj -o autosample-Windows.msi
 
       - name: Prepare artifacts (macOS)
         if: runner.os == 'macOS'
