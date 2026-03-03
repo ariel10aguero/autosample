@@ -7,6 +7,7 @@ use autosample_core::{AutosampleEngine, EngineStatus, LogLevel, ProgressUpdate};
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
 use midir::MidiOutputConnection;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
@@ -106,6 +107,39 @@ impl AutosampleApp {
             AudioInputPermissionState::Checking => "Checking…",
             AudioInputPermissionState::Granted => "Granted",
             AudioInputPermissionState::Denied(_) => "Blocked",
+        }
+    }
+
+    fn user_documents_dir_fallback() -> PathBuf {
+        let home = std::env::var_os("HOME")
+            .or_else(|| std::env::var_os("USERPROFILE"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        home.join("Documents")
+    }
+
+    fn resolve_gui_output_dir(raw_output: &str) -> PathBuf {
+        let trimmed = raw_output.trim();
+        let input = if trimmed.is_empty() {
+            PathBuf::from("./output")
+        } else {
+            PathBuf::from(trimmed)
+        };
+
+        if input.is_absolute() {
+            return input;
+        }
+
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        {
+            return Self::user_documents_dir_fallback()
+                .join("Autosample Output")
+                .join(input);
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            input
         }
     }
 
@@ -418,6 +452,20 @@ impl AutosampleApp {
             }
             self.restart_blocked_until = None;
         }
+
+        let resolved_output = Self::resolve_gui_output_dir(&self.state.config.output);
+        if let Err(e) = std::fs::create_dir_all(&resolved_output) {
+            self.state.add_log(
+                LogLevel::Error,
+                format!(
+                    "Start failed: output directory is not writable ('{}'): {}",
+                    resolved_output.display(),
+                    e
+                ),
+            );
+            return;
+        }
+        self.state.config.output = resolved_output.to_string_lossy().to_string();
 
         // Validate note/velocity expressions.
         let notes = match parse_notes(&self.state.config.notes) {
