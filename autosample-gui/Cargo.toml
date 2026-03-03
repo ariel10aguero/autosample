@@ -24,6 +24,12 @@ midir = { workspace = true }
 rfd = "0.14"
 egui_extras = { version = "0.29", features = ["image"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Media_Capture",
+    "Foundation",
+] }
+
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winres = "0.1"
 
