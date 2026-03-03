@@ -58,7 +58,7 @@ jobs:
           workspaces: . -> target
 
       # -----------------------------------------------------------------------
-      # Build — Linux / Windows
+      # Build — Linux / Windows (native)
       # -----------------------------------------------------------------------
       - name: Build workspace (release)
         if: runner.os != 'macOS'
@@ -66,8 +66,9 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Build — macOS universal binary
-      # We detect which architecture the runner is so we know which target
-      # is "native" and which is cross-compiled.
+      # Two explicit target passes then lipo merges them.
+      # MACOSX_DEPLOYMENT_TARGET is set per-step to avoid mismatched
+      # LC_VERSION_MIN_MACOSX load commands between the two slices.
       # -----------------------------------------------------------------------
       - name: Build macOS x86_64
         if: runner.os == 'macOS'
@@ -120,12 +121,7 @@ jobs:
           ls -lh ../autosample-macOS.zip
 
       # -----------------------------------------------------------------------
-      # Windows — MSI installer via WiX v3
-      # The root cause of the LGHT0103 error was that heat.exe generates
-      # file paths relative to the working directory at harvest time.
-      # Fix: cd into the payload directory so heat.exe sees the files
-      # directly, then use -var var.PayloadDir to give light.exe the
-      # correct absolute base path for resolving them at link time.
+      # Windows — WiX v3 MSI installer
       # -----------------------------------------------------------------------
       - name: Install WiX Toolset
         if: runner.os == 'Windows'
@@ -176,79 +172,76 @@ jobs:
           Get-ChildItem $payloadDir | Select-Object Name, Length
 
           # ── WXS source ────────────────────────────────────────────────
-          # We use -var var.PayloadDir in the heat command and reference
-          # that same variable in candle so light.exe can find the files.
+          # Icon SourceFile uses $(var.PayloadDir) — the backtick before $
+          # prevents PowerShell from expanding it; WiX expands it instead.
           $wxs = @"
-          <?xml version="1.0" encoding="UTF-8"?>
-          <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
-            <Product
-              Id="*"
-              Name="Autosample"
-              Language="1033"
-              Version="$version"
-              Manufacturer="Autosample Team"
-              UpgradeCode="B218DD76-F0E0-4E68-A0D2-A9F0277C2F0D">
-              <Package
-                InstallerVersion="500"
-                Compressed="yes"
-                InstallScope="perMachine" />
-              <MajorUpgrade
-                DowngradeErrorMessage="A newer version of Autosample is already installed." />
-              <MediaTemplate EmbedCab="yes" />
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product
+    Id="*"
+    Name="Autosample"
+    Language="1033"
+    Version="$version"
+    Manufacturer="Autosample Team"
+    UpgradeCode="B218DD76-F0E0-4E68-A0D2-A9F0277C2F0D">
+    <Package
+      InstallerVersion="500"
+      Compressed="yes"
+      InstallScope="perMachine" />
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Autosample is already installed." />
+    <MediaTemplate EmbedCab="yes" />
 
-              <Icon Id="AutosampleIcon"
-                    SourceFile="!(bind.path.autosample-gui.exe)" />
-              <Property Id="ARPPRODUCTICON" Value="AutosampleIcon" />
+    <Icon Id="AutosampleIcon"
+          SourceFile="`$(var.PayloadDir)\autosample-gui.exe" />
+    <Property Id="ARPPRODUCTICON" Value="AutosampleIcon" />
 
-              <Feature Id="MainFeature" Title="Autosample" Level="1">
-                <ComponentGroupRef Id="PayloadFiles" />
-                <ComponentGroupRef Id="ShortcutComponents" />
-              </Feature>
+    <Feature Id="MainFeature" Title="Autosample" Level="1">
+      <ComponentGroupRef Id="PayloadFiles" />
+      <ComponentGroupRef Id="ShortcutComponents" />
+    </Feature>
 
-              <UIRef Id="WixUI_Minimal" />
-              <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
-            </Product>
+    <UIRef Id="WixUI_Minimal" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+  </Product>
 
-            <Fragment>
-              <Directory Id="TARGETDIR" Name="SourceDir">
-                <Directory Id="ProgramFiles64Folder">
-                  <Directory Id="INSTALLDIR" Name="Autosample" />
-                </Directory>
-                <Directory Id="DesktopFolder" Name="Desktop" />
-              </Directory>
-            </Fragment>
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Autosample" />
+      </Directory>
+      <Directory Id="DesktopFolder" Name="Desktop" />
+    </Directory>
+  </Fragment>
 
-            <Fragment>
-              <ComponentGroup Id="ShortcutComponents" Directory="INSTALLDIR">
-                <Component Id="DesktopShortcutComp" Guid="*">
-                  <Shortcut
-                    Id="DesktopShortcut"
-                    Directory="DesktopFolder"
-                    Name="Autosample"
-                    Description="Launch Autosample GUI"
-                    WorkingDirectory="INSTALLDIR"
-                    Icon="AutosampleIcon"
-                    IconIndex="0"
-                    Target="[INSTALLDIR]autosample-gui.exe" />
-                  <RegistryValue
-                    Root="HKCU"
-                    Key="Software\Autosample"
-                    Name="DesktopShortcut"
-                    Type="integer"
-                    Value="1"
-                    KeyPath="yes" />
-                </Component>
-              </ComponentGroup>
-            </Fragment>
-          </Wix>
-          "@
+  <Fragment>
+    <ComponentGroup Id="ShortcutComponents" Directory="INSTALLDIR">
+      <Component Id="DesktopShortcutComp" Guid="*">
+        <Shortcut
+          Id="DesktopShortcut"
+          Directory="DesktopFolder"
+          Name="Autosample"
+          Description="Launch Autosample GUI"
+          WorkingDirectory="INSTALLDIR"
+          Icon="AutosampleIcon"
+          IconIndex="0"
+          Target="[INSTALLDIR]autosample-gui.exe" />
+        <RegistryValue
+          Root="HKCU"
+          Key="Software\Autosample"
+          Name="DesktopShortcut"
+          Type="integer"
+          Value="1"
+          KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
+"@
 
           Set-Content -Path installer\autosample.wxs -Value $wxs -Encoding UTF8
 
           # ── WiX pipeline ──────────────────────────────────────────────
-          # Key fix: use -var var.PayloadDir so heat embeds the variable
-          # name instead of an absolute path. Then pass -dPayloadDir=...
-          # to both candle and light so they resolve the same variable.
           Write-Host "heat..."
           heat.exe dir "$payloadDir" `
             -cg PayloadFiles `
@@ -284,7 +277,7 @@ jobs:
           Get-Item autosample-Windows.msi | Select-Object Name, Length
 
       # -----------------------------------------------------------------------
-      # Windows ZIP (portable)
+      # Windows ZIP (portable, no installer)
       # -----------------------------------------------------------------------
       - name: Package Windows artifacts
         if: runner.os == 'Windows'
@@ -308,7 +301,7 @@ jobs:
           cd dist && zip -r "../autosample-Linux.zip" .
 
       # -----------------------------------------------------------------------
-      # Upload artifacts
+      # Upload artifacts for the release-assets job
       # -----------------------------------------------------------------------
       - name: Upload macOS artifact
         if: runner.os == 'macOS'
