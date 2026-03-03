@@ -48,6 +48,24 @@ jobs:
       - name: Build workspace (release)
         run: cargo build --release --workspace
 
+      - name: Install Windows bundling tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install wixtoolset --no-progress -y
+          cargo install cargo-bundle --locked
+
+      - name: Build Windows installer (MSI)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo bundle -p autosample-gui --release --format msi
+          $msi = Get-ChildItem target\release\bundle\msi\*.msi | Select-Object -First 1
+          if (-not $msi) {
+            throw "MSI file was not generated."
+          }
+          Copy-Item $msi.FullName autosample-Windows.msi -Force
+
       - name: Prepare artifacts (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -74,10 +92,20 @@ jobs:
           (cd dist && zip -r "../autosample-Linux.zip" .)
 
       - name: Upload build archive
+        if: runner.os != 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: autosample-${{ runner.os }}
           path: autosample-${{ runner.os }}.zip
+
+      - name: Upload build artifacts (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosample-${{ runner.os }}
+          path: |
+            autosample-Windows.zip
+            autosample-Windows.msi
 
   release-assets:
     name: Attach assets to GitHub Release
@@ -95,4 +123,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: release-assets/*.zip
+          files: |
+            release-assets/*.zip
+            release-assets/*.msi
