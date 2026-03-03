@@ -129,6 +129,9 @@ try {
 
     Write-Host "Packing MSIX -> $msixPath"
     & $makeAppx pack /d $stageRoot /p $msixPath /o | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw "MakeAppx failed with exit code $LASTEXITCODE."
+    }
 
     Write-Host ""
     Write-Host "MSIX package created:"
