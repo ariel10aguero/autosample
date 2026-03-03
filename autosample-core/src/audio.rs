@@ -165,8 +165,15 @@ pub fn start_audio_capture(
 
     let stream = match config.sample_format() {
         SampleFormat::F32 => build_input_stream::<f32>(&device, &config.config(), sender)?,
+        SampleFormat::I8 => build_input_stream::<i8>(&device, &config.config(), sender)?,
         SampleFormat::I16 => build_input_stream::<i16>(&device, &config.config(), sender)?,
+        SampleFormat::I32 => build_input_stream::<i32>(&device, &config.config(), sender)?,
+        SampleFormat::I64 => build_input_stream::<i64>(&device, &config.config(), sender)?,
+        SampleFormat::U8 => build_input_stream::<u8>(&device, &config.config(), sender)?,
         SampleFormat::U16 => build_input_stream::<u16>(&device, &config.config(), sender)?,
+        SampleFormat::U32 => build_input_stream::<u32>(&device, &config.config(), sender)?,
+        SampleFormat::U64 => build_input_stream::<u64>(&device, &config.config(), sender)?,
+        SampleFormat::F64 => build_input_stream::<f64>(&device, &config.config(), sender)?,
         format => {
             anyhow::bail!("Unsupported sample format: {:?}", format)
         }
