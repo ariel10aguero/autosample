@@ -48,14 +48,6 @@ jobs:
           echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> $GITHUB_ENV
           echo "BINDGEN_EXTRA_CLANG_ARGS=--sysroot=$(xcrun --show-sdk-path)" >> $GITHUB_ENV
 
-      # ─── Windows deps (BEFORE build) ──────────────────────────
-      - name: Install Windows bundling tools
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          choco install wixtoolset --no-progress -y
-          cargo install cargo-wix --locked
-
       # ─── Rust toolchain ───────────────────────────────────────
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +74,7 @@ jobs:
         if: runner.os == 'macOS'
         run: cargo build --release --workspace --target aarch64-apple-darwin
 
-      - name: Lipo Universal Binaries
+      - name: Create macOS Universal Binaries
         if: runner.os == 'macOS'
         run: |
           mkdir -p target/universal-apple-darwin/release
@@ -110,44 +102,40 @@ jobs:
           cp target/release/autosample-gui dist/
           cd dist && zip -r "../autosample-Linux.zip" .
 
-      - name: Package (Windows ZIP)
+      - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target\release\autosample.exe dist\
-          Copy-Item target\release\autosample-gui.exe dist\
+          Copy-Item target\release\autosample.exe     dist\autosample.exe
+          Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
           Compress-Archive -Path dist\* -DestinationPath autosample-Windows.zip -Force
 
-      - name: Package (Windows MSI)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cargo wix -p autosample-gui --no-build --nocapture
-          $msi = Get-ChildItem target\wix\*.msi | Select-Object -First 1
-          if (-not $msi) { throw "MSI not generated" }
-          Copy-Item $msi.FullName autosample-Windows.msi -Force
-
       # ─── Upload artifacts ─────────────────────────────────────
-      - name: Upload artifacts (non-Windows)
-        if: runner.os != 'Windows'
+      - name: Upload artifact (macOS)
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: autosample-${{ runner.os }}
-          path: autosample-${{ runner.os }}.zip
+          name: autosample-macOS
+          path: autosample-macOS.zip
 
-      - name: Upload artifacts (Windows)
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosample-Linux
+          path: autosample-Linux.zip
+
+      - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: autosample-Windows
-          path: |
-            autosample-Windows.zip
-            autosample-Windows.msi
+          path: autosample-Windows.zip
 
-  # ─── Attach to release ──────────────────────────────────────
+  # ─── Attach to GitHub Release ───────────────────────────────
   release-assets:
-    name: Attach to GitHub Release
+    name: Attach assets to GitHub Release
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -158,11 +146,12 @@ jobs:
           merge-multiple: true
           path: release-assets
 
-      - name: Upload to release
+      - name: List release assets (debug)
+        run: ls -lah release-assets/
+
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            release-assets/*.zip
-            release-assets/*.msi
+          files: release-assets/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
