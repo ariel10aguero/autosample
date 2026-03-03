@@ -176,10 +176,38 @@ Accepted values:
 
 ---
 
+## Desktop Microphone Permission (GUI)
+
+The GUI now performs a startup microphone preflight check and expects to run
+as a platform app package (not only as a raw standalone binary) for best
+permission behavior.
+
+macOS:
+
+* Launch the packaged `Autosample.app`
+* On first run, allow the microphone prompt
+* If you clicked "Don't Allow", re-enable in `System Settings -> Privacy & Security -> Microphone`
+
+Windows:
+
+* Launch the packaged GUI executable from the `Autosample-GUI` package
+* If microphone access is blocked, open `Settings -> Privacy & security -> Microphone`
+* Ensure both "Microphone access" and desktop app access are enabled
+
+Quick verification checklist:
+
+* Start the GUI and confirm audio permission status becomes **Granted**
+* Confirm the input meter reacts to incoming signal
+* Start a short session and verify exported files contain recorded audio
+
+---
+
 ## Troubleshooting
 
 * **MIDI device not found:** Verify with `list-midi` and use exact name/index
 * **Audio device not found:** Verify with `list-audio` and use exact name/index
+* **No microphone prompt on macOS:** Make sure you are launching `Autosample.app` (bundled app), not only a raw binary
+* **No recording on Windows:** Verify global and desktop-app microphone privacy toggles are enabled
 * **Attack is cut:** Increase `--preroll-ms`
 * **Release is cut:** Increase `--tail-ms`
 * **Low level output:** Use `--normalize peak`

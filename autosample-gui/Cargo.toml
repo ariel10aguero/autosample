@@ -5,27 +5,29 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
-[[bin]]
-name = "autosample-gui"
-path = "src/main.rs"
+[features]
+default = []
+console = []
 
 [dependencies]
+anyhow = { workspace = true }
 autosample-core = { path = "../autosample-core" }
+chrono = { workspace = true }
+crossbeam-channel = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
-anyhow = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-crossbeam-channel = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-chrono = { workspace = true }
+egui_extras = { version = "0.29", features = ["default_fonts", "image"] }
 midir = { workspace = true }
 rfd = "0.14"
-egui_extras = { version = "0.29", features = ["image"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.build-dependencies]
 winres = "0.1"
 
 [package.metadata.bundle]
+name = "Autosample"
+identifier = "com.autosample.gui"
 osx_info_plist_ext = { NSMicrophoneUsageDescription = "Autosample needs microphone access to record audio from your selected input device." }

@@ -98,8 +98,38 @@ jobs:
         run: |
           mkdir -p dist
           cp target/universal-apple-darwin/release/autosample dist/
-          cp target/universal-apple-darwin/release/autosample-gui dist/
-          cd dist && zip -r "../autosample-macOS.zip" .
+          APP_ROOT="dist/Autosample.app"
+          mkdir -p "$APP_ROOT/Contents/MacOS" "$APP_ROOT/Contents/Resources"
+          cp target/universal-apple-darwin/release/autosample-gui "$APP_ROOT/Contents/MacOS/Autosample"
+          chmod +x "$APP_ROOT/Contents/MacOS/Autosample"
+          cp autosample-gui/assets/logo.png "$APP_ROOT/Contents/Resources/logo.png"
+          cat > "$APP_ROOT/Contents/Info.plist" <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+            <dict>
+              <key>CFBundleName</key>
+              <string>Autosample</string>
+              <key>CFBundleDisplayName</key>
+              <string>Autosample</string>
+              <key>CFBundleIdentifier</key>
+              <string>com.autosample.gui</string>
+              <key>CFBundleVersion</key>
+              <string>${{ github.ref_name }}</string>
+              <key>CFBundleShortVersionString</key>
+              <string>${{ github.ref_name }}</string>
+              <key>CFBundleExecutable</key>
+              <string>Autosample</string>
+              <key>CFBundlePackageType</key>
+              <string>APPL</string>
+              <key>LSMinimumSystemVersion</key>
+              <string>11.0</string>
+              <key>NSMicrophoneUsageDescription</key>
+              <string>Autosample needs microphone access to record audio from your selected input device.</string>
+            </dict>
+          </plist>
+          EOF
+          cd dist && zip -r "../autosample-macOS.zip" autosample Autosample.app
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
@@ -113,10 +143,17 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target\release\autosample.exe     dist\autosample.exe
-          Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
-          Compress-Archive -Path dist\* -DestinationPath autosample-Windows.zip -Force
+          New-Item -ItemType Directory -Force dist\Autosample-GUI | Out-Null
+          Copy-Item target\release\autosample.exe dist\Autosample-GUI\autosample.exe
+          Copy-Item target\release\autosample-gui.exe dist\Autosample-GUI\Autosample.exe
+          @'
+          Launch Autosample.exe to run the GUI app.
+
+          Notes:
+          - This package includes a dedicated GUI executable with embedded app manifest.
+          - If microphone access is blocked, open Windows Settings > Privacy & security > Microphone.
+          '@ | Set-Content dist\Autosample-GUI\README.txt
+          Compress-Archive -Path dist\Autosample-GUI -DestinationPath autosample-Windows.zip -Force
 
       # ─── Upload artifacts ─────────────────────────────────────
       - name: Upload artifact (macOS)
