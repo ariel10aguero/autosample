@@ -39,6 +39,10 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install macOS Rust targets
+        if: runner.os == 'macOS'
+        run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+
       - name: Configure Windows runtime (static CRT)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -52,7 +56,14 @@ jobs:
             . -> target
 
       - name: Build workspace (release)
+        if: runner.os != 'macOS'
         run: cargo build --release --workspace
+
+      - name: Build workspace (macOS x64 + arm64)
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release --workspace --target x86_64-apple-darwin
+          cargo build --release --workspace --target aarch64-apple-darwin
 
       - name: Install Windows bundling tools
         if: runner.os == 'Windows'
@@ -80,6 +91,14 @@ jobs:
           }
 
           New-Item -ItemType Directory -Force installer | Out-Null
+          New-Item -ItemType Directory -Force installer\payload | Out-Null
+
+          Copy-Item target\release\autosample-gui.exe installer\payload\autosample-gui.exe -Force
+          Copy-Item target\release\autosample.exe installer\payload\autosample.exe -Force
+          Get-ChildItem target\release\*.dll -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName installer\payload\ -Force
+          }
+
           $wxs = @"
           <?xml version="1.0" encoding="UTF-8"?>
           <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
@@ -93,9 +112,12 @@ jobs:
               <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
               <MajorUpgrade DowngradeErrorMessage="A newer version of Autosample is already installed." />
               <MediaTemplate EmbedCab="yes" />
+              <Icon Id="AutosampleIcon" SourceFile="installer\payload\autosample-gui.exe" />
+              <Property Id="ARPPRODUCTICON" Value="AutosampleIcon" />
 
               <Feature Id="MainFeature" Title="Autosample" Level="1">
-                <ComponentGroupRef Id="AutosampleBinaries" />
+                <ComponentGroupRef Id="PayloadFiles" />
+                <ComponentGroupRef Id="ShortcutComponents" />
               </Feature>
 
               <UIRef Id="WixUI_Minimal" />
@@ -111,12 +133,24 @@ jobs:
             </Fragment>
 
             <Fragment>
-              <ComponentGroup Id="AutosampleBinaries" Directory="INSTALLDIR">
-                <Component Id="AutosampleGuiExe" Guid="*">
-                  <File Id="AutosampleGuiFile" Source="target\release\autosample-gui.exe" KeyPath="yes" />
-                </Component>
-                <Component Id="AutosampleCliExe" Guid="*">
-                  <File Id="AutosampleCliFile" Source="target\release\autosample.exe" KeyPath="yes" />
+              <ComponentGroup Id="ShortcutComponents" Directory="INSTALLDIR">
+                <Component Id="DesktopShortcutComponent" Guid="*">
+                  <Shortcut
+                    Id="DesktopShortcut"
+                    Directory="DesktopFolder"
+                    Name="Autosample"
+                    Description="Launch Autosample GUI"
+                    WorkingDirectory="INSTALLDIR"
+                    Icon="AutosampleIcon"
+                    IconIndex="0"
+                    Target="[INSTALLDIR]autosample-gui.exe" />
+                  <RegistryValue
+                    Root="HKCU"
+                    Key="Software\Autosample"
+                    Name="DesktopShortcut"
+                    Type="integer"
+                    Value="1"
+                    KeyPath="yes" />
                 </Component>
               </ComponentGroup>
             </Fragment>
@@ -124,15 +158,23 @@ jobs:
           "@
 
           Set-Content -Path installer\autosample.wxs -Value $wxs -Encoding UTF8
-          candle.exe -arch x64 installer\autosample.wxs -out installer\
-          light.exe -ext WixUIExtension -cultures:en-us installer\autosample.wixobj -o autosample-Windows.msi
+          heat.exe dir installer\payload -cg PayloadFiles -dr INSTALLDIR -gg -scom -sreg -sfrag -srd -out installer\payload.wxs
+          candle.exe -arch x64 installer\autosample.wxs installer\payload.wxs -out installer\
+          light.exe -ext WixUIExtension -cultures:en-us installer\autosample.wixobj installer\payload.wixobj -o autosample-Windows.msi
 
       - name: Prepare artifacts (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist
-          cp target/release/autosample dist/autosample
-          cp target/release/autosample-gui dist/autosample-gui
+          lipo -create \
+            target/x86_64-apple-darwin/release/autosample \
+            target/aarch64-apple-darwin/release/autosample \
+            -output dist/autosample
+          lipo -create \
+            target/x86_64-apple-darwin/release/autosample-gui \
+            target/aarch64-apple-darwin/release/autosample-gui \
+            -output dist/autosample-gui
+          chmod +x dist/autosample dist/autosample-gui
           (cd dist && zip -r "../autosample-macOS.zip" .)
 
       - name: Prepare artifacts (Windows)
