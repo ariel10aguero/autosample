@@ -187,6 +187,31 @@ Accepted values:
 
 ---
 
+## Platform Permissions
+
+### Windows microphone access
+
+For Windows privacy integration, package the GUI as **MSIX** so the app has package identity and declares microphone capability.
+
+Build MSIX from PowerShell on Windows:
+
+```powershell
+.\autosample-gui\windows\build-msix.ps1 -Configuration Release
+```
+
+After installing the generated `.msix`, run the app once and check:
+
+`Settings -> Privacy & security -> Microphone`
+
+### macOS output write access
+
+The GUI defaults output to a user-writable absolute folder (`~/Music/Autosample`).
+If writing fails, choose a folder inside your home directory (for example `Documents` or `Music`) using the output folder picker.
+
+The app performs a write preflight when you press Start and logs a clear error before sampling begins if the destination is not writable.
+
+---
+
 ## GUI Screenshot
 
 ![Autosample GUI screenshot](app-screenshot.png)

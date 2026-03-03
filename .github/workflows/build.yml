@@ -116,6 +116,8 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\autosample.exe     dist\autosample.exe
           Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
+          .\autosample-gui\windows\build-msix.ps1 -Configuration Release
+          Copy-Item autosample-gui\target\msix\*.msix dist\
           Compress-Archive -Path dist\* -DestinationPath autosample-Windows.zip -Force
 
       # ─── Upload artifacts ─────────────────────────────────────
@@ -138,7 +140,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: autosample-Windows
-          path: autosample-Windows.zip
+          path: |
+            autosample-Windows.zip
+            dist/*.msix
 
   # ─── Attach to GitHub Release ───────────────────────────────
   release-assets:
@@ -159,6 +163,8 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-assets/*.zip
+          files: |
+            release-assets/*.zip
+            release-assets/*.msix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

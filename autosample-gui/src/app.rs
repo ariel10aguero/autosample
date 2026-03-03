@@ -7,10 +7,12 @@ use autosample_core::{AutosampleEngine, EngineStatus, LogLevel, ProgressUpdate};
 use crossbeam_channel::{unbounded, Receiver};
 use eframe::egui;
 use midir::MidiOutputConnection;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 // How long after a Stop we refuse to allow a new Start.  Gives CoreMIDI time
 // to fully release the previous connection before we open a new one.
@@ -90,6 +92,74 @@ impl AutosampleApp {
         }
     }
 
+    fn output_write_platform_hint() -> &'static str {
+        #[cfg(target_os = "macos")]
+        {
+            "Choose a folder you own (for example in Home/Documents/Music) and retry."
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            "Choose a writable output folder and retry."
+        }
+    }
+
+    fn output_target_dir(&self) -> PathBuf {
+        let base = self.state.config.output.trim();
+        let mut target = PathBuf::from(base);
+        let prefix = self.state.config.prefix.trim();
+        if !prefix.is_empty() {
+            target = target.join(prefix);
+        }
+        target
+    }
+
+    fn preflight_output_write_access(&mut self) -> bool {
+        let output_root = self.state.config.output.trim();
+        if output_root.is_empty() {
+            self.state.add_log(
+                LogLevel::Error,
+                "Start blocked: output directory is empty. Pick an output folder first."
+                    .to_string(),
+            );
+            return false;
+        }
+
+        let target_dir = self.output_target_dir();
+        if let Err(err) = fs::create_dir_all(&target_dir) {
+            self.state.add_log(
+                LogLevel::Error,
+                format!(
+                    "Start blocked: cannot create output directory '{}': {}. {}",
+                    target_dir.display(),
+                    err,
+                    Self::output_write_platform_hint()
+                ),
+            );
+            return false;
+        }
+
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let probe_path = target_dir.join(format!(".autosample_write_probe_{}", stamp));
+        if let Err(err) = fs::write(&probe_path, b"probe") {
+            self.state.add_log(
+                LogLevel::Error,
+                format!(
+                    "Start blocked: output directory is not writable ('{}'): {}. {}",
+                    target_dir.display(),
+                    err,
+                    Self::output_write_platform_hint()
+                ),
+            );
+            return false;
+        }
+        let _ = fs::remove_file(probe_path);
+
+        true
+    }
+
     fn run_audio_permission_probe(&mut self, reason: &str) {
         let audio_in = self.state.config.audio_in.trim().to_string();
         if audio_in.is_empty() {
@@ -118,12 +188,7 @@ impl AutosampleApp {
         // Opening a short-lived stream here triggers first-run permission prompts
         // where the OS requires explicit microphone consent.
         let (tx, _rx) = unbounded();
-        match start_audio_capture(
-            device,
-            self.state.config.sr,
-            self.state.config.channels,
-            tx,
-        ) {
+        match start_audio_capture(device, self.state.config.sr, self.state.config.channels, tx) {
             Ok(_capture) => {
                 self.state.set_audio_permission_granted();
                 self.state.add_log(
@@ -172,7 +237,10 @@ impl AutosampleApp {
             Err(err) => {
                 self.state.add_log(
                     LogLevel::Warning,
-                    format!("Input meter could not open audio device '{}': {}", audio_in, err),
+                    format!(
+                        "Input meter could not open audio device '{}': {}",
+                        audio_in, err
+                    ),
                 );
                 self.stop_input_meter();
                 return;
@@ -250,7 +318,9 @@ impl AutosampleApp {
         };
 
         let smoothed = match self.state.input_meter_db {
-            Some(prev) => (prev * (1.0 - METER_SMOOTHING_ALPHA)) + (instant_db * METER_SMOOTHING_ALPHA),
+            Some(prev) => {
+                (prev * (1.0 - METER_SMOOTHING_ALPHA)) + (instant_db * METER_SMOOTHING_ALPHA)
+            }
             None => instant_db,
         };
         self.state.input_meter_db = Some(smoothed);
@@ -282,6 +352,9 @@ impl AutosampleApp {
                     Self::audio_permission_platform_hint()
                 ),
             );
+            return;
+        }
+        if !self.preflight_output_write_access() {
             return;
         }
         if self.stop_requested {
@@ -466,10 +539,7 @@ impl AutosampleApp {
 
         self.state.add_log(
             LogLevel::Info,
-            format!(
-                "Sending All Notes Off for '{}' ({})",
-                midi_target, reason
-            ),
+            format!("Sending All Notes Off for '{}' ({})", midi_target, reason),
         );
 
         // Re-use active connection when available to avoid a fresh CoreMIDI

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -14,11 +15,10 @@ impl OutputOrganization {
         match s.to_lowercase().as_str() {
             "flat" => Ok(OutputOrganization::Flat),
             "by_note" | "by-note" | "bynote" => Ok(OutputOrganization::ByNote),
-            "by_note_velocity" | "by-note-velocity" | "bynotevelocity" => Ok(OutputOrganization::ByNote),
-            _ => anyhow::bail!(
-                "Invalid output organization: {}. Use flat or by-note",
-                s
-            ),
+            "by_note_velocity" | "by-note-velocity" | "bynotevelocity" => {
+                Ok(OutputOrganization::ByNote)
+            }
+            _ => anyhow::bail!("Invalid output organization: {}. Use flat or by-note", s),
         }
     }
 }
@@ -58,7 +58,7 @@ impl Default for RunConfig {
             sr: 48000,
             channels: 2,
             format: "wav".to_string(),
-            output: "./output".to_string(),
+            output: default_output_directory(),
             prefix: "sample".to_string(),
             trim_threshold_db: Some(-50.0),
             normalize: Some("peak".to_string()),
@@ -66,6 +66,30 @@ impl Default for RunConfig {
             resume: false,
             output_organization: OutputOrganization::Flat,
         }
+    }
+}
+
+fn default_output_directory() -> String {
+    if let Some(home) = user_home_dir() {
+        return home
+            .join("Music")
+            .join("Autosample")
+            .to_string_lossy()
+            .to_string();
+    }
+
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("output")
+        .to_string_lossy()
+        .to_string()
+}
+
+fn user_home_dir() -> Option<PathBuf> {
+    if cfg!(target_os = "windows") {
+        std::env::var_os("USERPROFILE").map(PathBuf::from)
+    } else {
+        std::env::var_os("HOME").map(PathBuf::from)
     }
 }
 

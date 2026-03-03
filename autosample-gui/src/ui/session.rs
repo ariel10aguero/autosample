@@ -2,6 +2,7 @@
 use crate::state::AppState;
 use autosample_core::OutputOrganization;
 use eframe::egui;
+use std::path::PathBuf;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     // NOTE: no ScrollArea here (sidebar owns scrolling)
@@ -94,7 +95,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             ui.add(egui::DragValue::new(&mut state.config.round_robin).range(1..=10));
         });
     });
-
 }
 
 pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
@@ -105,9 +105,14 @@ pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
         ui.horizontal(|ui| {
             ui.label("Directory:");
             ui.text_edit_singleline(&mut state.config.output);
-            if ui.button("📁").on_hover_text("Choose output directory").clicked() {
+            if ui
+                .button("📁")
+                .on_hover_text("Choose output directory")
+                .clicked()
+            {
                 if let Some(path) = rfd::FileDialog::new().pick_folder() {
-                    state.config.output = path.display().to_string();
+                    let normalized = normalize_output_path(path);
+                    state.config.output = normalized.display().to_string();
                 }
             }
         });
@@ -156,4 +161,16 @@ pub fn show_output(ui: &mut egui::Ui, state: &mut AppState) {
 
         ui.checkbox(&mut state.config.resume, "Resume (skip existing files)");
     });
+}
+
+fn normalize_output_path(path: PathBuf) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    };
+
+    absolute.canonicalize().unwrap_or(absolute)
 }

@@ -28,4 +28,4 @@ egui_extras = { version = "0.29", features = ["image"] }
 winres = "0.1"
 
 [package.metadata.bundle]
-osx_info_plist_ext = { NSMicrophoneUsageDescription = "Autosample needs microphone access to record audio from your selected input device." }
+osx_info_plist_ext = { NSMicrophoneUsageDescription = "Autosample needs microphone access to record audio from your selected input device.", NSDocumentsFolderUsageDescription = "Autosample needs access to your Documents folder to export sampled audio when you choose that location.", NSDesktopFolderUsageDescription = "Autosample needs access to your Desktop folder to export sampled audio when you choose that location.", NSDownloadsFolderUsageDescription = "Autosample needs access to your Downloads folder to export sampled audio when you choose that location." }
