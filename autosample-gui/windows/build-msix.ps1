@@ -12,8 +12,35 @@ function Require-Command([string]$Name, [string]$InstallHint) {
     }
 }
 
+function Resolve-MakeAppxPath {
+    $cmd = Get-Command makeappx.exe -ErrorAction SilentlyContinue
+    if ($cmd) {
+        return $cmd.Source
+    }
+
+    $sdkRoots = @(
+        "${env:ProgramFiles(x86)}\Windows Kits\10\bin",
+        "${env:ProgramFiles}\Windows Kits\10\bin"
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    foreach ($root in $sdkRoots) {
+        $candidate = Get-ChildItem -Path $root -Recurse -Filter makeappx.exe -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if ($candidate) {
+            return $candidate.FullName
+        }
+    }
+
+    return $null
+}
+
 Require-Command cargo "Install Rust from https://rustup.rs/"
-Require-Command makeappx.exe "Install Windows SDK (MakeAppx)."
+$makeAppx = Resolve-MakeAppxPath
+if (-not $makeAppx) {
+    throw "makeappx.exe not found. Install Windows SDK (MakeAppx) and ensure Windows Kits are available."
+}
+Write-Host "Using MakeAppx at: $makeAppx"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $guiRoot = Resolve-Path (Join-Path $scriptDir "..")
@@ -101,7 +128,7 @@ try {
     }
 
     Write-Host "Packing MSIX -> $msixPath"
-    makeappx.exe pack /d $stageRoot /p $msixPath /o | Out-Host
+    & $makeAppx pack /d $stageRoot /p $msixPath /o | Out-Host
 
     Write-Host ""
     Write-Host "MSIX package created:"
