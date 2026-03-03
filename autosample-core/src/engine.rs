@@ -126,19 +126,21 @@ impl AutosampleEngine {
         });
 
         // Connect MIDI
-        let (mut midi_conn, connected_port_name, available_ports) = if let Some(existing) =
-            preconnected_midi
-        {
-            existing
-        } else {
-            let _ = progress_tx.send(ProgressUpdate::Log {
-                level: LogLevel::Info,
-                message: format!("Initializing MIDI output '{}'", config.midi_out),
-            });
-            connect_midi_output_by_name(&config.midi_out).with_context(|| {
-                format!("MIDI output initialization/connection failed for '{}'", config.midi_out)
-            })?
-        };
+        let (mut midi_conn, connected_port_name, available_ports) =
+            if let Some(existing) = preconnected_midi {
+                existing
+            } else {
+                let _ = progress_tx.send(ProgressUpdate::Log {
+                    level: LogLevel::Info,
+                    message: format!("Initializing MIDI output '{}'", config.midi_out),
+                });
+                connect_midi_output_by_name(&config.midi_out).with_context(|| {
+                    format!(
+                        "MIDI output initialization/connection failed for '{}'",
+                        config.midi_out
+                    )
+                })?
+            };
 
         let _ = progress_tx.send(ProgressUpdate::Log {
             level: LogLevel::Info,
@@ -153,7 +155,8 @@ impl AutosampleEngine {
         let audio_device = find_audio_device(&config.audio_in)?;
         let (audio_tx, audio_rx) = crossbeam_channel::unbounded();
 
-        let audio_capture = start_audio_capture(audio_device, config.sr, config.channels, audio_tx)?;
+        let audio_capture =
+            start_audio_capture(audio_device, config.sr, config.channels, audio_tx)?;
 
         let sample_rate = audio_capture.config.sample_rate;
         let channels = audio_capture.config.channels;
@@ -260,7 +263,8 @@ impl AutosampleEngine {
                         let _ = progress_tx.send(ProgressUpdate::SampleFailed {
                             index: idx + 1,
                             total: total_jobs,
-                            error: "Captured silence (-inf dB). Sample was not exported.".to_string(),
+                            error: "Captured silence (-inf dB). Sample was not exported."
+                                .to_string(),
                         });
                         continue;
                     }
@@ -452,10 +456,8 @@ fn capture_sample_with_trigger(
 ) -> Result<Vec<f32>> {
     let preroll_samples =
         (sample_rate as usize * channels as usize * config.preroll_ms as usize) / 1000;
-    let hold_samples =
-        (sample_rate as usize * channels as usize * config.hold_ms as usize) / 1000;
-    let tail_samples =
-        (sample_rate as usize * channels as usize * config.tail_ms as usize) / 1000;
+    let hold_samples = (sample_rate as usize * channels as usize * config.hold_ms as usize) / 1000;
+    let tail_samples = (sample_rate as usize * channels as usize * config.tail_ms as usize) / 1000;
     let total_samples = preroll_samples + hold_samples + tail_samples;
 
     ring.clear();
@@ -503,8 +505,12 @@ fn process_audio(samples: &[f32], config: &RunConfig, channels: u16) -> Vec<f32>
 
     if let Some(threshold_db) = config.trim_threshold_db {
         let min_tail_samples = (config.sr as usize * channels as usize * 100) / 1000;
-        let (trimmed, _, _) =
-            trim_silence(&processed, threshold_db, channels as usize, min_tail_samples);
+        let (trimmed, _, _) = trim_silence(
+            &processed,
+            threshold_db,
+            channels as usize,
+            min_tail_samples,
+        );
         processed = trimmed;
     }
 

@@ -29,7 +29,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) -> Option<RunCommand> {
         ui.label(egui::RichText::new(status_text).size(18.0));
         ui.add_space(20.0);
 
-        if state.engine_status == EngineStatus::Idle || state.engine_status == EngineStatus::Completed {
+        if state.engine_status == EngineStatus::Idle
+            || state.engine_status == EngineStatus::Completed
+        {
             if ui.button("▶ Start").clicked() {
                 cmd = Some(RunCommand::Start);
             }
@@ -51,12 +53,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) -> Option<RunCommand> {
             let denom = state.progress.total_samples.max(1) as f32;
             let progress_fraction = state.progress.current_index as f32 / denom;
 
-            ui.add(
-                egui::ProgressBar::new(progress_fraction).text(format!(
-                    "{}/{} samples",
-                    state.progress.current_index, state.progress.total_samples
-                )),
-            );
+            ui.add(egui::ProgressBar::new(progress_fraction).text(format!(
+                "{}/{} samples",
+                state.progress.current_index, state.progress.total_samples
+            )));
 
             ui.add_space(10.0);
 
@@ -68,7 +68,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) -> Option<RunCommand> {
             ));
 
             ui.horizontal(|ui| {
-                ui.label(format!("✅ Completed: {}", state.progress.samples_completed));
+                ui.label(format!(
+                    "✅ Completed: {}",
+                    state.progress.samples_completed
+                ));
                 ui.label(format!("⏭ Skipped: {}", state.progress.samples_skipped));
                 ui.label(format!("❌ Failed: {}", state.progress.samples_failed));
             });

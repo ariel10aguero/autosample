@@ -188,7 +188,9 @@ mod tests {
     #[test]
     fn test_parse_note_range_descending_fails() {
         let err = parse_notes("E4..C4").unwrap_err();
-        assert!(err.to_string().contains("descending ranges are not supported"));
+        assert!(err
+            .to_string()
+            .contains("descending ranges are not supported"));
     }
 
     #[test]

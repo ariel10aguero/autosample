@@ -28,8 +28,6 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Autosample",
         options,
-        Box::new(|cc| {
-            Ok(Box::new(AutosampleApp::new(cc)))
-        }),
+        Box::new(|cc| Ok(Box::new(AutosampleApp::new(cc)))),
     )
 }

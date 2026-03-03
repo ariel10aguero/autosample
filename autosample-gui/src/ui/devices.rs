@@ -44,8 +44,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             let refresh = ui
                 .add_enabled(
                     !refresh_disabled,
-                    egui::Button::new("🔄")
-                        .min_size(egui::vec2(DEVICE_REFRESH_BUTTON_WIDTH, 0.0)),
+                    egui::Button::new("🔄").min_size(egui::vec2(DEVICE_REFRESH_BUTTON_WIDTH, 0.0)),
                 )
                 .on_hover_text("Refresh MIDI and audio devices");
             if refresh.clicked() {
@@ -93,8 +92,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             let refresh = ui
                 .add_enabled(
                     !refresh_disabled,
-                    egui::Button::new("🔄")
-                        .min_size(egui::vec2(DEVICE_REFRESH_BUTTON_WIDTH, 0.0)),
+                    egui::Button::new("🔄").min_size(egui::vec2(DEVICE_REFRESH_BUTTON_WIDTH, 0.0)),
                 )
                 .on_hover_text("Refresh MIDI and audio devices");
             if refresh.clicked() {
@@ -114,8 +112,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
     if state.engine_status == EngineStatus::Running {
         ui.label(
-            egui::RichText::new("Refresh unavailable while running")
-                .color(egui::Color32::GRAY),
+            egui::RichText::new("Refresh unavailable while running").color(egui::Color32::GRAY),
         );
     } else if state.is_device_scan_running() {
         ui.label(egui::RichText::new("Scanning devices...").color(egui::Color32::LIGHT_BLUE));

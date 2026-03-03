@@ -16,7 +16,11 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             let mut threshold = state.config.trim_threshold_db.unwrap_or(-50.0);
             ui.horizontal(|ui| {
                 ui.label("Threshold:");
-                ui.add(egui::DragValue::new(&mut threshold).suffix(" dB").speed(0.5));
+                ui.add(
+                    egui::DragValue::new(&mut threshold)
+                        .suffix(" dB")
+                        .speed(0.5),
+                );
             });
             state.config.trim_threshold_db = Some(threshold);
         } else {

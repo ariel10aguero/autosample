@@ -27,8 +27,9 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
                 ui.horizontal(|ui| {
                     ui.add_space(8.0);
                     ui.label("Preset:");
-                    let response =
-                        ui.add(egui::TextEdit::singleline(&mut state.preset_name).hint_text("Untitled"));
+                    let response = ui.add(
+                        egui::TextEdit::singleline(&mut state.preset_name).hint_text("Untitled"),
+                    );
                     if response.changed() {
                         state.config.prefix = state.preset_name.clone();
                     }
@@ -81,9 +82,7 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) -> Option<RunCommand> {
             ui.add_space(4.0);
 
             if missing.is_empty() {
-                ui.label(
-                    egui::RichText::new("✅ Ready to run").color(egui::Color32::LIGHT_GREEN),
-                );
+                ui.label(egui::RichText::new("✅ Ready to run").color(egui::Color32::LIGHT_GREEN));
             } else {
                 for item in missing {
                     ui.label(
@@ -238,12 +237,10 @@ fn show_run_with_start_gate(
             let denom = state.progress.total_samples.max(1) as f32;
             let progress_fraction = state.progress.current_index as f32 / denom;
 
-            ui.add(
-                egui::ProgressBar::new(progress_fraction).text(format!(
-                    "{}/{} samples",
-                    state.progress.current_index, state.progress.total_samples
-                )),
-            );
+            ui.add(egui::ProgressBar::new(progress_fraction).text(format!(
+                "{}/{} samples",
+                state.progress.current_index, state.progress.total_samples
+            )));
 
             ui.add_space(10.0);
 
@@ -255,7 +252,10 @@ fn show_run_with_start_gate(
             ));
 
             ui.horizontal(|ui| {
-                ui.label(format!("✅ Completed: {}", state.progress.samples_completed));
+                ui.label(format!(
+                    "✅ Completed: {}",
+                    state.progress.samples_completed
+                ));
                 ui.label(format!("⏭ Skipped: {}", state.progress.samples_skipped));
                 ui.label(format!("❌ Failed: {}", state.progress.samples_failed));
             });

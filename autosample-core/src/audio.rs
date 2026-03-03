@@ -21,7 +21,7 @@ pub fn list_audio_devices() -> Result<()> {
     let host = cpal::default_host();
     println!("\nAvailable Audio Input Devices:");
     println!("{}", "-".repeat(80));
-    
+
     for (idx, device) in host.input_devices()?.enumerate() {
         let name = device.name().unwrap_or_else(|_| "Unknown".to_string());
         println!("\n  {}: {}", idx, name);
@@ -46,7 +46,7 @@ pub fn list_audio_devices() -> Result<()> {
             }
         }
     }
-    
+
     println!();
     Ok(())
 }
@@ -108,7 +108,11 @@ pub fn find_audio_device(name_or_id: &str) -> Result<Device> {
         if contains_positions.next().is_some() {
             let matches: Vec<String> = devices
                 .iter()
-                .filter_map(|(_, name)| name.to_lowercase().contains(&needle_lower).then_some(name.clone()))
+                .filter_map(|(_, name)| {
+                    name.to_lowercase()
+                        .contains(&needle_lower)
+                        .then_some(name.clone())
+                })
                 .collect();
             anyhow::bail!(
                 "Audio device name '{}' is ambiguous. Matches: {}. Select by numeric index instead.",

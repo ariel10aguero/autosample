@@ -44,10 +44,7 @@ pub fn convert_to_mp3(wav_path: &Path, mp3_path: &Path) -> Result<()> {
         .output()?;
 
     if !output.status.success() {
-        anyhow::bail!(
-            "ffmpeg failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        anyhow::bail!("ffmpeg failed: {}", String::from_utf8_lossy(&output.stderr));
     }
 
     info!("Converted to MP3: {:?}", mp3_path);

@@ -170,14 +170,10 @@ impl AppState {
                         self.apply_audio_scan_result(result);
 
                         if let Some(midi_err) = self.pending_midi_scan_error.take() {
-                            self.device_scan_state =
-                                DeviceScanState::Failed(midi_err.clone());
+                            self.device_scan_state = DeviceScanState::Failed(midi_err.clone());
                             self.add_log(
                                 LogLevel::Warning,
-                                format!(
-                                    "Device refresh completed with warnings: {}",
-                                    midi_err
-                                ),
+                                format!("Device refresh completed with warnings: {}", midi_err),
                             );
                         } else {
                             self.device_scan_state = DeviceScanState::Idle;
@@ -192,15 +188,12 @@ impl AppState {
                         }
                     }
                     Err(audio_err) => {
-                        let combined = if let Some(midi_err) =
-                            self.pending_midi_scan_error.take()
-                        {
+                        let combined = if let Some(midi_err) = self.pending_midi_scan_error.take() {
                             format!("{}; {}", midi_err, audio_err)
                         } else {
                             audio_err
                         };
-                        self.device_scan_state =
-                            DeviceScanState::Failed(combined.clone());
+                        self.device_scan_state = DeviceScanState::Failed(combined.clone());
                         self.add_log(
                             LogLevel::Warning,
                             format!("Device refresh failed: {}", combined),
@@ -256,11 +249,10 @@ impl AppState {
     fn apply_audio_scan_result(&mut self, result: DeviceScanResult) {
         let preferred_audio = self.config.audio_in.trim().to_string();
         self.audio_devices = result.audio_devices;
-        self.selected_audio_idx = Self::resolve_selection_index(
-            &preferred_audio,
-            &self.audio_devices,
-            |d| d.name.as_str(),
-        );
+        self.selected_audio_idx =
+            Self::resolve_selection_index(&preferred_audio, &self.audio_devices, |d| {
+                d.name.as_str()
+            });
 
         if let Some(idx) = self.selected_audio_idx {
             if let Some(device) = self.audio_devices.get(idx) {
@@ -271,17 +263,10 @@ impl AppState {
         }
     }
 
-    fn apply_midi_scan_result(
-        &mut self,
-        midi_devices: Vec<MidiPortInfo>,
-        preferred_midi: &str,
-    ) {
+    fn apply_midi_scan_result(&mut self, midi_devices: Vec<MidiPortInfo>, preferred_midi: &str) {
         self.midi_devices = midi_devices;
-        self.selected_midi_idx = Self::resolve_selection_index(
-            preferred_midi,
-            &self.midi_devices,
-            |d| d.name.as_str(),
-        );
+        self.selected_midi_idx =
+            Self::resolve_selection_index(preferred_midi, &self.midi_devices, |d| d.name.as_str());
 
         if let Some(idx) = self.selected_midi_idx {
             if let Some(device) = self.midi_devices.get(idx) {
@@ -292,11 +277,7 @@ impl AppState {
         }
     }
 
-    fn resolve_selection_index<T, F>(
-        preferred: &str,
-        devices: &[T],
-        get_name: F,
-    ) -> Option<usize>
+    fn resolve_selection_index<T, F>(preferred: &str, devices: &[T], get_name: F) -> Option<usize>
     where
         F: Fn(&T) -> &str,
     {

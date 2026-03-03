@@ -237,7 +237,10 @@ pub fn list_midi_ports() -> Result<()> {
 /// does not create two separate CoreMIDI clients.
 pub fn get_midi_ports() -> Result<Vec<MidiPortInfo>> {
     if let Some(cached) = cached_ports() {
-        info!("get_midi_ports: returning cached port list ({} ports).", cached.len());
+        info!(
+            "get_midi_ports: returning cached port list ({} ports).",
+            cached.len()
+        );
         return Ok(cached);
     }
 
@@ -341,7 +344,9 @@ pub fn connect_midi_output_by_name(
         .map(|(idx, s)| MidiPortInfo {
             index: idx,
             name: s
-                .trim_start_matches(|c: char| c == '[' || c.is_ascii_digit() || c == ']' || c == ' ')
+                .trim_start_matches(|c: char| {
+                    c == '[' || c.is_ascii_digit() || c == ']' || c == ' '
+                })
                 .to_string(),
         })
         .collect();
