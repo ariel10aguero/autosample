@@ -85,12 +85,14 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           mkdir -p target/universal-apple-darwin/release
-          for bin in autosample autosample-gui; do
-            lipo -create \
-              target/x86_64-apple-darwin/release/$bin \
-              target/aarch64-apple-darwin/release/$bin \
-              -output target/universal-apple-darwin/release/$bin
-          done
+          lipo -create \
+            target/x86_64-apple-darwin/release/autosample \
+            target/aarch64-apple-darwin/release/autosample \
+            -output target/universal-apple-darwin/release/autosample
+          lipo -create \
+            target/x86_64-apple-darwin/release/autosample_gui \
+            target/aarch64-apple-darwin/release/autosample_gui \
+            -output target/universal-apple-darwin/release/autosample_gui
 
       # ─── Package ──────────────────────────────────────────────
       - name: Package (macOS)
@@ -100,7 +102,7 @@ jobs:
           cp target/universal-apple-darwin/release/autosample dist/
           APP_ROOT="dist/Autosample.app"
           mkdir -p "$APP_ROOT/Contents/MacOS" "$APP_ROOT/Contents/Resources"
-          cp target/universal-apple-darwin/release/autosample-gui "$APP_ROOT/Contents/MacOS/Autosample"
+          cp target/universal-apple-darwin/release/autosample_gui "$APP_ROOT/Contents/MacOS/Autosample"
           chmod +x "$APP_ROOT/Contents/MacOS/Autosample"
           cp autosample-gui/assets/logo.png "$APP_ROOT/Contents/Resources/logo.png"
           cat > "$APP_ROOT/Contents/Info.plist" <<'EOF'
@@ -136,7 +138,7 @@ jobs:
         run: |
           mkdir -p dist
           cp target/release/autosample dist/
-          cp target/release/autosample-gui dist/
+          cp target/release/autosample_gui dist/autosample-gui
           cd dist && zip -r "../autosample-Linux.zip" .
 
       - name: Package (Windows)
@@ -144,10 +146,17 @@ jobs:
         shell: pwsh
         run: |
           cargo install cargo-bundle --locked
-          choco install wixtoolset --no-progress -y
-          $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
-          if (Test-Path $wixBin) {
-            $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
+            choco install wixtoolset --no-progress -y
+          }
+          $wixBins = @(
+            "${env:ProgramFiles(x86)}\WiX Toolset v3.14\bin",
+            "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+          )
+          foreach ($wixBin in $wixBins) {
+            if (Test-Path $wixBin) {
+              $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+            }
           }
           cargo bundle --release -p autosample-gui --format msi
           New-Item -ItemType Directory -Force dist | Out-Null

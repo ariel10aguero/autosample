@@ -9,6 +9,10 @@ license.workspace = true
 default = []
 console = []
 
+[[bin]]
+name = "autosample_gui"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = { workspace = true }
 autosample-core = { path = "../autosample-core" }
