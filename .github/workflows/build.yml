@@ -1,4 +1,3 @@
-# .github/workflows/build.yml
 name: Build (macOS + Windows + Linux)
 
 on:
@@ -15,10 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-13 = Intel runner — reliable for building universal binaries
-        # because cross-compiling x86_64 -> aarch64 is easier than the reverse
-        # when audio/MIDI system frameworks are involved.
-        os: [macos-13, windows-latest, ubuntu-latest]
+        os: [macos-latest, windows-latest, ubuntu-latest]
 
     steps:
       - name: Checkout
@@ -53,11 +49,6 @@ jobs:
         if: runner.os == 'macOS'
         run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
 
-      # NOTE: Do NOT set +crt-static globally on Windows.
-      # cpal and the WASAPI backend require the dynamic CRT.
-      # The GUI subsystem is handled in source via:
-      #   #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-
       # -----------------------------------------------------------------------
       # Caching
       # -----------------------------------------------------------------------
@@ -67,18 +58,16 @@ jobs:
           workspaces: . -> target
 
       # -----------------------------------------------------------------------
-      # Build — Linux / Windows (native, single target)
+      # Build — Linux / Windows
       # -----------------------------------------------------------------------
       - name: Build workspace (release)
         if: runner.os != 'macOS'
         run: cargo build --release --workspace
 
       # -----------------------------------------------------------------------
-      # Build — macOS (two separate target passes, then lipo)
-      #
-      # We set MACOSX_DEPLOYMENT_TARGET per-step so that both slices use a
-      # consistent minimum OS version and the linker doesn't warn about
-      # mismatched LC_VERSION_MIN_MACOSX load commands.
+      # Build — macOS universal binary
+      # We detect which architecture the runner is so we know which target
+      # is "native" and which is cross-compiled.
       # -----------------------------------------------------------------------
       - name: Build macOS x86_64
         if: runner.os == 'macOS'
@@ -96,14 +85,10 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           echo "=== x86_64 ==="
-          ls -lh target/x86_64-apple-darwin/release/autosample
-          ls -lh target/x86_64-apple-darwin/release/autosample-gui
           file target/x86_64-apple-darwin/release/autosample
           file target/x86_64-apple-darwin/release/autosample-gui
 
           echo "=== aarch64 ==="
-          ls -lh target/aarch64-apple-darwin/release/autosample
-          ls -lh target/aarch64-apple-darwin/release/autosample-gui
           file target/aarch64-apple-darwin/release/autosample
           file target/aarch64-apple-darwin/release/autosample-gui
 
@@ -127,8 +112,6 @@ jobs:
           echo "=== Universal binary verification ==="
           lipo -info dist/autosample
           lipo -info dist/autosample-gui
-          file dist/autosample
-          file dist/autosample-gui
 
       - name: Package macOS artifacts
         if: runner.os == 'macOS'
@@ -138,6 +121,11 @@ jobs:
 
       # -----------------------------------------------------------------------
       # Windows — MSI installer via WiX v3
+      # The root cause of the LGHT0103 error was that heat.exe generates
+      # file paths relative to the working directory at harvest time.
+      # Fix: cd into the payload directory so heat.exe sees the files
+      # directly, then use -var var.PayloadDir to give light.exe the
+      # correct absolute base path for resolving them at link time.
       # -----------------------------------------------------------------------
       - name: Install WiX Toolset
         if: runner.os == 'Windows'
@@ -157,15 +145,14 @@ jobs:
           $wixBin = Join-Path $wixRoot.FullName "bin"
           Write-Host "WiX bin: $wixBin"
 
-          # Persist for subsequent steps
-          "WIX=$wixBin"    | Out-File -FilePath $env:GITHUB_ENV  -Encoding utf8 -Append
-          "$wixBin"        | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "WIX=$wixBin" | Out-File -FilePath $env:GITHUB_ENV  -Encoding utf8 -Append
+          "$wixBin"     | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build Windows MSI
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # ── version string ──────────────────────────────────────────────
+          # ── version string ────────────────────────────────────────────
           $tag     = "${{ github.event.release.tag_name }}"
           $version = $tag -replace '^[vV]', ''
           if ($version -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') {
@@ -175,17 +162,22 @@ jobs:
           }
           Write-Host "MSI product version: $version"
 
-          # ── stage payload ────────────────────────────────────────────────
-          New-Item -ItemType Directory -Force installer\payload | Out-Null
+          # ── stage payload ─────────────────────────────────────────────
+          $payloadDir = "$PWD\installer\payload"
+          New-Item -ItemType Directory -Force $payloadDir | Out-Null
 
-          Copy-Item target\release\autosample-gui.exe installer\payload\ -Force
-          Copy-Item target\release\autosample.exe     installer\payload\ -Force
+          Copy-Item target\release\autosample-gui.exe "$payloadDir\" -Force
+          Copy-Item target\release\autosample.exe     "$payloadDir\" -Force
 
-          # Copy any side-by-side DLLs (e.g. from cpal/WASAPI)
           Get-ChildItem target\release\*.dll -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName installer\payload\ -Force }
+            ForEach-Object { Copy-Item $_.FullName "$payloadDir\" -Force }
 
-          # ── WXS source ───────────────────────────────────────────────────
+          Write-Host "Payload contents:"
+          Get-ChildItem $payloadDir | Select-Object Name, Length
+
+          # ── WXS source ────────────────────────────────────────────────
+          # We use -var var.PayloadDir in the heat command and reference
+          # that same variable in candle so light.exe can find the files.
           $wxs = @"
           <?xml version="1.0" encoding="UTF-8"?>
           <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
@@ -205,7 +197,7 @@ jobs:
               <MediaTemplate EmbedCab="yes" />
 
               <Icon Id="AutosampleIcon"
-                    SourceFile="installer\payload\autosample-gui.exe" />
+                    SourceFile="!(bind.path.autosample-gui.exe)" />
               <Property Id="ARPPRODUCTICON" Value="AutosampleIcon" />
 
               <Feature Id="MainFeature" Title="Autosample" Level="1">
@@ -253,36 +245,46 @@ jobs:
 
           Set-Content -Path installer\autosample.wxs -Value $wxs -Encoding UTF8
 
-          # ── WiX pipeline ─────────────────────────────────────────────────
+          # ── WiX pipeline ──────────────────────────────────────────────
+          # Key fix: use -var var.PayloadDir so heat embeds the variable
+          # name instead of an absolute path. Then pass -dPayloadDir=...
+          # to both candle and light so they resolve the same variable.
           Write-Host "heat..."
-          heat.exe dir installer\payload `
+          heat.exe dir "$payloadDir" `
             -cg PayloadFiles `
             -dr INSTALLDIR `
             -gg -scom -sreg -sfrag -srd `
+            -var var.PayloadDir `
             -out installer\payload.wxs
-          if ($LASTEXITCODE -ne 0) { throw "heat failed" }
+          if ($LASTEXITCODE -ne 0) { throw "heat failed (exit $LASTEXITCODE)" }
+
+          Write-Host "Generated payload.wxs:"
+          Get-Content installer\payload.wxs
 
           Write-Host "candle..."
-          candle.exe -arch x64 `
+          candle.exe `
+            -arch x64 `
+            "-dPayloadDir=$payloadDir" `
             installer\autosample.wxs `
             installer\payload.wxs `
             -out installer\
-          if ($LASTEXITCODE -ne 0) { throw "candle failed" }
+          if ($LASTEXITCODE -ne 0) { throw "candle failed (exit $LASTEXITCODE)" }
 
           Write-Host "light..."
           light.exe `
             -ext WixUIExtension `
             -cultures:en-us `
+            "-dPayloadDir=$payloadDir" `
             installer\autosample.wixobj `
             installer\payload.wixobj `
             -o autosample-Windows.msi
-          if ($LASTEXITCODE -ne 0) { throw "light failed" }
+          if ($LASTEXITCODE -ne 0) { throw "light failed (exit $LASTEXITCODE)" }
 
           Write-Host "MSI ready:"
           Get-Item autosample-Windows.msi | Select-Object Name, Length
 
       # -----------------------------------------------------------------------
-      # Windows ZIP (portable, no installer needed)
+      # Windows ZIP (portable)
       # -----------------------------------------------------------------------
       - name: Package Windows artifacts
         if: runner.os == 'Windows'
@@ -306,7 +308,7 @@ jobs:
           cd dist && zip -r "../autosample-Linux.zip" .
 
       # -----------------------------------------------------------------------
-      # Upload artifacts for the release-assets job
+      # Upload artifacts
       # -----------------------------------------------------------------------
       - name: Upload macOS artifact
         if: runner.os == 'macOS'
