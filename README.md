@@ -51,6 +51,17 @@ It gives you:
 
 ## Installation
 
+### Windows Installer (recommended)
+
+For Windows users, install using the generated `.msi` package from Releases:
+
+1. Download `autosample-Windows-installer.msi`
+2. Run the installer and complete the setup wizard
+3. Launch **Autosample** from Start Menu
+4. If prompted, allow microphone access
+5. If no prompt appears, enable access in:
+   `Settings -> Privacy & security -> Microphone`
+
 ### 1. Clone
 
 ```bash
@@ -68,6 +79,12 @@ Binary output:
 
 ```text
 target/release/autosample
+```
+
+To build the Windows installer locally (on Windows):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\autosample-gui\windows\build-installer.ps1
 ```
 
 ---
@@ -190,7 +207,7 @@ macOS:
 
 Windows:
 
-* Launch the packaged GUI executable from the `Autosample-GUI` package
+* Install and launch **Autosample** from the Windows installer (`.msi`)
 * If microphone access is blocked, open `Settings -> Privacy & security -> Microphone`
 * Ensure both "Microphone access" and desktop app access are enabled
 

@@ -30,4 +30,7 @@ winres = "0.1"
 [package.metadata.bundle]
 name = "Autosample"
 identifier = "com.autosample.gui"
+short_description = "Automatic MIDI autosampler with GUI."
+long_description = "Autosample triggers MIDI notes, records audio input, and exports organized multisamples."
+icon = ["assets/logo.png"]
 osx_info_plist_ext = { NSMicrophoneUsageDescription = "Autosample needs microphone access to record audio from your selected input device." }

@@ -143,17 +143,24 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist\Autosample-GUI | Out-Null
-          Copy-Item target\release\autosample.exe dist\Autosample-GUI\autosample.exe
-          Copy-Item target\release\autosample-gui.exe dist\Autosample-GUI\Autosample.exe
+          cargo install cargo-bundle --locked
+          choco install wixtoolset --no-progress -y
+          $wixBin = "${env:ProgramFiles(x86)}\WiX Toolset v3.11\bin"
+          if (Test-Path $wixBin) {
+            $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          cargo bundle --release -p autosample-gui --format msi
+          New-Item -ItemType Directory -Force dist | Out-Null
+          New-Item -ItemType Directory -Force dist\autosample-cli | Out-Null
+          Copy-Item target\release\bundle\msi\*.msi dist\autosample-Windows-installer.msi
+          Copy-Item target\release\autosample.exe dist\autosample-cli\autosample.exe
           @'
-          Launch Autosample.exe to run the GUI app.
+          Autosample CLI (Windows)
 
-          Notes:
-          - This package includes a dedicated GUI executable with embedded app manifest.
-          - If microphone access is blocked, open Windows Settings > Privacy & security > Microphone.
-          '@ | Set-Content dist\Autosample-GUI\README.txt
-          Compress-Archive -Path dist\Autosample-GUI -DestinationPath autosample-Windows.zip -Force
+          Example:
+          autosample.exe --help
+          '@ | Set-Content dist\autosample-cli\README.txt
+          Compress-Archive -Path dist\autosample-cli\* -DestinationPath dist\autosample-Windows-cli.zip -Force
 
       # ─── Upload artifacts ─────────────────────────────────────
       - name: Upload artifact (macOS)
@@ -175,7 +182,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: autosample-Windows
-          path: autosample-Windows.zip
+          path: |
+            dist\autosample-Windows-installer.msi
+            dist\autosample-Windows-cli.zip
 
   # ─── Attach to GitHub Release ───────────────────────────────
   release-assets:
@@ -196,6 +205,8 @@ jobs:
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-assets/*.zip
+          files: |
+            release-assets/*.zip
+            release-assets/*.msi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
