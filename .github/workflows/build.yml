@@ -145,7 +145,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          cargo install cargo-bundle --locked
+          cargo install cargo-wix --locked
           if (-not (Get-Command candle.exe -ErrorAction SilentlyContinue)) {
             choco install wixtoolset --no-progress -y
           }
@@ -156,12 +156,26 @@ jobs:
           foreach ($wixBin in $wixBins) {
             if (Test-Path $wixBin) {
               $wixBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+              if (-not $env:WIX) {
+                $env:WIX = [System.IO.Path]::GetDirectoryName($wixBin)
+              }
             }
           }
-          cargo bundle --release -p autosample-gui --format msi
           New-Item -ItemType Directory -Force dist | Out-Null
           New-Item -ItemType Directory -Force dist\autosample-cli | Out-Null
-          Copy-Item target\release\bundle\msi\*.msi dist\autosample-Windows-installer.msi
+          Push-Location autosample-gui
+          if (-not (Test-Path .\wix\main.wxs)) {
+            cargo wix init
+          }
+          cargo wix --nocapture
+          Pop-Location
+          $installer = Get-ChildItem -Path . -Recurse -Filter *.msi |
+            Where-Object { $_.FullName -match "\\target\\wix\\" } |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw "MSI installer was not produced."
+          }
+          Copy-Item $installer.FullName dist\autosample-Windows-installer.msi
           Copy-Item target\release\autosample.exe dist\autosample-cli\autosample.exe
           @'
           Autosample CLI (Windows)
