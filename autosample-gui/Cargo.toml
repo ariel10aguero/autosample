@@ -16,7 +16,7 @@ chrono = { workspace = true }
 crossbeam-channel = { workspace = true }
 eframe = { workspace = true }
 egui = { workspace = true }
-egui_extras = { version = "0.29", features = ["default_fonts", "image"] }
+egui_extras = { version = "0.29", features = ["image"] }
 midir = { workspace = true }
 rfd = "0.14"
 serde = { workspace = true }
