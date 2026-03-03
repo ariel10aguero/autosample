@@ -42,7 +42,7 @@
   </Applications>
   <Capabilities>
     <Capability Name="internetClient" />
-    <uap:Capability Name="microphone" />
+    <DeviceCapability Name="microphone" />
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>
 </Package>
