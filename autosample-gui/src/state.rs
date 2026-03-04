@@ -2,6 +2,7 @@ use autosample_core::{
     AudioDeviceInfo, EngineStatus, LogLevel, MidiPortInfo, ProgressUpdate, RunConfig,
 };
 use crossbeam_channel::{Receiver, TryRecvError};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::device_scan::{self, DeviceScanResult};
@@ -25,6 +26,7 @@ pub struct AppState {
     pub engine_status: EngineStatus,
     pub progress: ProgressState,
     pub logs: Vec<LogEntry>,
+    pub last_output_dir: Option<PathBuf>,
     pub input_meter_db: Option<f32>,
     pub audio_permission_state: AudioInputPermissionState,
 
@@ -92,6 +94,7 @@ impl Default for AppState {
             engine_status: EngineStatus::Idle,
             progress: ProgressState::default(),
             logs: Vec::new(),
+            last_output_dir: None,
             input_meter_db: None,
             audio_permission_state: AudioInputPermissionState::Unknown,
             device_scan_state: DeviceScanState::Idle,
@@ -358,12 +361,16 @@ impl AppState {
 
     pub fn handle_engine_event(&mut self, event: ProgressUpdate) {
         match event {
-            ProgressUpdate::Started { total_samples } => {
+            ProgressUpdate::Started {
+                total_samples,
+                output_dir,
+            } => {
                 self.progress.total_samples = total_samples;
                 self.progress.current_index = 0;
                 self.progress.samples_completed = 0;
                 self.progress.samples_failed = 0;
                 self.progress.samples_skipped = 0;
+                self.last_output_dir = Some(PathBuf::from(output_dir));
                 self.engine_status = EngineStatus::Running;
             }
             ProgressUpdate::SampleStarted {
@@ -434,6 +441,7 @@ impl AppState {
         self.logs.clear();
         self.progress = ProgressState::default();
         self.engine_status = EngineStatus::Idle;
+        self.last_output_dir = None;
         self.preset_name.clear();
         self.config.prefix.clear();
     }

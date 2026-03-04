@@ -431,6 +431,9 @@ fn show_run_controls(
 // ---------------------------------------------------------------------------
 
 fn samples_output_dir(state: &AppState) -> PathBuf {
+    if let Some(path) = &state.last_output_dir {
+        return path.clone();
+    }
     let output = PathBuf::from(state.config.output.trim());
     let prefix = state.config.prefix.trim();
     if prefix.is_empty() {

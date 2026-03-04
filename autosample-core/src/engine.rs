@@ -175,6 +175,7 @@ impl AutosampleEngine {
 
         let _ = progress_tx.send(ProgressUpdate::Started {
             total_samples: total_jobs,
+            output_dir: output_dir.to_string_lossy().to_string(),
         });
 
         // Ring buffer setup

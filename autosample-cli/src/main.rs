@@ -61,8 +61,14 @@ fn main() -> Result<()> {
                 }
 
                 match event {
-                    ProgressUpdate::Started { total_samples } => {
-                        info!("Starting session: {} samples to record", total_samples);
+                    ProgressUpdate::Started {
+                        total_samples,
+                        output_dir,
+                    } => {
+                        info!(
+                            "Starting session: {} samples to record (output: {})",
+                            total_samples, output_dir
+                        );
                     }
                     ProgressUpdate::SampleStarted {
                         index,
