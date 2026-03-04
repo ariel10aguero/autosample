@@ -20,6 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ─── Linux deps ───────────────────────────────────────────
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
@@ -33,96 +34,131 @@ jobs:
             libxinerama-dev \
             libxcursor-dev \
             libxkbcommon-dev \
+            libxkbcommon-x11-dev \
             libwayland-dev \
-            libgl1-mesa-dev
+            libgl1-mesa-dev \
+            libdbus-1-dev \
+            libssl-dev
 
-      - name: Install Rust (stable)
+      # ─── macOS deps ───────────────────────────────────────────
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> $GITHUB_ENV
+          echo "BINDGEN_EXTRA_CLANG_ARGS=--sysroot=$(xcrun --show-sdk-path)" \
+            >> $GITHUB_ENV
+
+      # ─── Rust toolchain ───────────────────────────────────────
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Add macOS Universal targets
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-darwin
 
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: |
-            . -> target
 
-      - name: Build workspace (release)
+      # ─── Build ────────────────────────────────────────────────
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
         run: cargo build --release --workspace
 
-      - name: Install Windows bundling tools
+      - name: Build (Windows - static CRT)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          choco install wixtoolset --no-progress -y
-          cargo install cargo-bundle --locked
+        # crt-static is set in .cargo/config.toml
+        run: cargo build --release --workspace
 
-      - name: Build Windows installer (MSI)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          cargo bundle -p autosample-gui --release --format msi
-          $msi = Get-ChildItem target\release\bundle\msi\*.msi | Select-Object -First 1
-          if (-not $msi) {
-            throw "MSI file was not generated."
-          }
-          Copy-Item $msi.FullName autosample-Windows.msi -Force
+      - name: Build macOS x86_64
+        if: runner.os == 'macOS'
+        run: cargo build --release --workspace --target x86_64-apple-darwin
 
-      - name: Prepare artifacts (macOS)
+      - name: Build macOS aarch64
+        if: runner.os == 'macOS'
+        run: cargo build --release --workspace --target aarch64-apple-darwin
+
+      - name: Create macOS Universal Binaries
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p target/universal-apple-darwin/release
+          for bin in autosample autosample-gui; do
+            lipo -create \
+              target/x86_64-apple-darwin/release/$bin \
+              target/aarch64-apple-darwin/release/$bin \
+              -output target/universal-apple-darwin/release/$bin
+          done
+
+      # ─── Package ──────────────────────────────────────────────
+      - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
           mkdir -p dist
-          cp target/release/autosample dist/autosample
-          cp target/release/autosample-gui dist/autosample-gui
-          (cd dist && zip -r "../autosample-macOS.zip" .)
+          cp target/universal-apple-darwin/release/autosample dist/
+          cp target/universal-apple-darwin/release/autosample-gui dist/
+          cd dist && zip -r "../autosample-macOS.zip" .
 
-      - name: Prepare artifacts (Windows)
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist
+          cp target/release/autosample dist/
+          cp target/release/autosample-gui dist/
+          cd dist && zip -r "../autosample-Linux.zip" .
+
+      - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target\release\autosample.exe dist\autosample.exe
+          Copy-Item target\release\autosample.exe     dist\autosample.exe
           Copy-Item target\release\autosample-gui.exe dist\autosample-gui.exe
           Compress-Archive -Path dist\* -DestinationPath autosample-Windows.zip -Force
 
-      - name: Prepare artifacts (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          mkdir -p dist
-          cp target/release/autosample dist/autosample
-          cp target/release/autosample-gui dist/autosample-gui
-          (cd dist && zip -r "../autosample-Linux.zip" .)
-
-      - name: Upload build archive
-        if: runner.os != 'Windows'
+      # ─── Upload artifacts ─────────────────────────────────────
+      - name: Upload artifact (macOS)
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: autosample-${{ runner.os }}
-          path: autosample-${{ runner.os }}.zip
+          name: autosample-macOS
+          path: autosample-macOS.zip
 
-      - name: Upload build artifacts (Windows)
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: autosample-Linux
+          path: autosample-Linux.zip
+
+      - name: Upload artifact (Windows)
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: autosample-${{ runner.os }}
-          path: |
-            autosample-Windows.zip
-            autosample-Windows.msi
+          name: autosample-Windows
+          path: autosample-Windows.zip
 
+  # ─── Attach to GitHub Release ───────────────────────────────
   release-assets:
     name: Attach assets to GitHub Release
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - name: Download build archives
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: autosample-*
           merge-multiple: true
           path: release-assets
 
-      - name: Upload archives to release
+      - name: List release assets (debug)
+        run: ls -lah release-assets/
+
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: |
-            release-assets/*.zip
-            release-assets/*.msi
+          files: release-assets/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

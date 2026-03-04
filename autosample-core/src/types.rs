@@ -123,6 +123,7 @@ pub struct SampleInfo {
 pub enum ProgressUpdate {
     Started {
         total_samples: usize,
+        output_dir: String,
     },
     SampleStarted {
         index: usize,

@@ -12,21 +12,116 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-// How long after a Stop we refuse to allow a new Start.  Gives CoreMIDI time
-// to fully release the previous connection before we open a new one.
 const POST_STOP_SETTLE_MS: u64 = 2000;
 const METER_FLOOR_DB: f32 = -60.0;
 const METER_SMOOTHING_ALPHA: f32 = 0.25;
+
+// ---------------------------------------------------------------------------
+// Windows microphone permission — called IN-PROCESS so Windows registers
+// autosample-gui.exe in Settings → Privacy → Microphone
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "windows")]
+mod windows_permission {
+    use windows::{
+        Foundation::IAsyncAction,
+        Media::Capture::{
+            MediaCapture, MediaCaptureInitializationSettings, StreamingCaptureMode,
+        },
+    };
+
+    #[derive(Debug)]
+    pub enum PermissionResult {
+        Granted,
+        Denied,
+        Error(String),
+    }
+
+    /// Calls MediaCapture.InitializeAsync() directly inside this process.
+    /// This is the ONLY reliable way to:
+    ///   1. Register the .exe in Settings → Privacy → Microphone
+    ///   2. Trigger the one-time "Allow microphone?" consent dialog
+    ///   3. Receive Granted/Denied without spawning a helper process
+    pub fn request_microphone_permission() -> PermissionResult {
+        // Run on a dedicated thread so we can block without freezing egui.
+        // The channel carries the result back.
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = try_init_media_capture();
+            let _ = tx.send(result);
+        });
+
+        // Block up to 30 s for the user to respond to the consent dialog.
+        match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+            Ok(r) => r,
+            Err(_) => PermissionResult::Error("Timed out waiting for permission response".into()),
+        }
+    }
+
+    fn try_init_media_capture() -> PermissionResult {
+        // Initialize WinRT for this thread
+        unsafe {
+            use windows::Win32::System::WinRT::RoInitialize;
+            use windows::Win32::System::WinRT::RO_INIT_MULTITHREADED;
+            let _ = RoInitialize(RO_INIT_MULTITHREADED);
+        }
+
+        let capture = match MediaCapture::new() {
+            Ok(c) => c,
+            Err(e) => return PermissionResult::Error(format!("MediaCapture::new failed: {}", e)),
+        };
+
+        let settings = match MediaCaptureInitializationSettings::new() {
+            Ok(s) => s,
+            Err(e) => {
+                return PermissionResult::Error(format!(
+                    "MediaCaptureInitializationSettings::new failed: {}",
+                    e
+                ))
+            }
+        };
+
+        if let Err(e) = settings.SetStreamingCaptureMode(StreamingCaptureMode::Audio) {
+            return PermissionResult::Error(format!("SetStreamingCaptureMode failed: {}", e));
+        }
+
+        let async_op: IAsyncAction = match capture.InitializeWithSettingsAsync(&settings) {
+            Ok(op) => op,
+            Err(e) => {
+                // E_ACCESSDENIED (0x80070005) means the user previously denied
+                // or the system policy blocks microphone access.
+                if e.code().0 as u32 == 0x80070005 {
+                    return PermissionResult::Denied;
+                }
+                return PermissionResult::Error(format!("InitializeWithSettingsAsync failed: {}", e));
+            }
+        };
+
+        // Block this worker thread until the async operation completes.
+        // The OS will show the consent dialog to the user if needed.
+        match async_op.get() {
+            Ok(_) => PermissionResult::Granted,
+            Err(e) => {
+                if e.code().0 as u32 == 0x80070005 {
+                    PermissionResult::Denied
+                } else {
+                    PermissionResult::Error(format!("InitializeAsync failed: {}", e))
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// App struct
+// ---------------------------------------------------------------------------
 
 pub struct AutosampleApp {
     pub state: AppState,
 
     engine_running: Arc<AtomicBool>,
     engine_cancel: Option<Arc<AtomicBool>>,
-
-    /// Active MIDI connection that is being used (or was last used) by the
-    /// engine.  Keeping it here means we can send All-Notes-Off through the
-    /// *same* connection without opening a new CoreMIDI client.
     active_midi_conn: Option<MidiOutputConnection>,
 
     stop_requested: bool,
@@ -36,6 +131,13 @@ pub struct AutosampleApp {
     meter_rx: Option<Receiver<Vec<f32>>>,
     meter_config_key: Option<(String, u32, u16)>,
     startup_audio_permission_probe_done: bool,
+
+    // Windows: permission check runs on a background thread.
+    // We poll this channel each frame.
+    #[cfg(target_os = "windows")]
+    win_permission_rx: Option<std::sync::mpsc::Receiver<windows_permission::PermissionResult>>,
+    #[cfg(not(target_os = "windows"))]
+    win_permission_rx: Option<()>, // zero-size placeholder on other platforms
 }
 
 impl AutosampleApp {
@@ -43,12 +145,9 @@ impl AutosampleApp {
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        // Pre-warm the CoreMIDI session as early as possible so the daemon
-        // has time to fully initialize before the user clicks Start.
         ensure_midi_warmup();
 
         let mut state = AppState::default();
-        // Scan happens after warmup so get_midi_ports() hits a live session.
         state.request_device_scan();
 
         Self {
@@ -63,17 +162,24 @@ impl AutosampleApp {
             meter_rx: None,
             meter_config_key: None,
             startup_audio_permission_probe_done: false,
+            win_permission_rx: None,
         }
     }
+
+    // -----------------------------------------------------------------------
+    // Permission helpers
+    // -----------------------------------------------------------------------
 
     fn audio_permission_platform_hint() -> &'static str {
         #[cfg(target_os = "macos")]
         {
-            "Allow microphone access in System Settings -> Privacy & Security -> Microphone."
+            "Allow microphone access in System Settings → Privacy & Security → Microphone."
         }
         #[cfg(target_os = "windows")]
         {
-            "Enable microphone access in Settings -> Privacy & security -> Microphone."
+            "Click \"Request Microphone Permission\" in the app. \
+             If the button doesn't trigger a prompt, open \
+             Settings → Privacy & security → Microphone and enable access."
         }
         #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
         {
@@ -84,12 +190,16 @@ impl AutosampleApp {
     fn audio_permission_menu_status(&self) -> &'static str {
         match self.state.audio_permission_state {
             AudioInputPermissionState::Unknown => "Not checked yet",
-            AudioInputPermissionState::Checking => "Checking...",
+            AudioInputPermissionState::Checking => "Checking…",
             AudioInputPermissionState::Granted => "Granted",
             AudioInputPermissionState::Denied(_) => "Blocked",
         }
     }
 
+    /// On Windows: spawns the WinRT permission check on a background thread
+    /// and stores the receiver so we can poll it each frame without blocking.
+    ///
+    /// On other platforms: attempts to open the CPAL device directly.
     fn run_audio_permission_probe(&mut self, reason: &str) {
         let audio_in = self.state.config.audio_in.trim().to_string();
         if audio_in.is_empty() {
@@ -97,33 +207,60 @@ impl AutosampleApp {
         }
 
         self.state.set_audio_permission_checking();
-        let device = match find_audio_device(&audio_in) {
-            Ok(device) => device,
+
+        #[cfg(target_os = "windows")]
+        {
+            // If a check is already in flight, don't start another.
+            if self.win_permission_rx.is_some() {
+                return;
+            }
+
+            self.state.add_log(
+                LogLevel::Info,
+                format!(
+                    "Requesting Windows microphone permission ({}). \
+                     A system dialog may appear…",
+                    reason
+                ),
+            );
+
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.win_permission_rx = Some(rx);
+
+            // Spawn so egui keeps rendering while the user responds to the dialog.
+            std::thread::spawn(move || {
+                let result = windows_permission::request_microphone_permission();
+                let _ = tx.send(result);
+            });
+
+            // Result is handled in poll_windows_permission() called each frame.
+            return;
+        }
+
+        // ── Non-Windows: probe directly ────────────────────────────────────
+        #[allow(unreachable_code)]
+        self.probe_cpal_device(&audio_in, reason);
+    }
+
+    fn probe_cpal_device(&mut self, audio_in: &str, reason: &str) {
+        let device = match find_audio_device(audio_in) {
+            Ok(d) => d,
             Err(err) => {
-                let reason = format!(
-                    "Could not open selected input device '{}': {}. {}",
+                let msg = format!(
+                    "Could not open input device '{}': {}. {}",
                     audio_in,
                     err,
                     Self::audio_permission_platform_hint()
                 );
-                self.state.set_audio_permission_denied(reason.clone());
-                self.state.add_log(
-                    LogLevel::Warning,
-                    format!("Audio permission check failed: {}", reason),
-                );
+                self.state.set_audio_permission_denied(msg.clone());
+                self.state
+                    .add_log(LogLevel::Warning, format!("Audio permission check failed: {}", msg));
                 return;
             }
         };
 
-        // Opening a short-lived stream here triggers first-run permission prompts
-        // where the OS requires explicit microphone consent.
         let (tx, _rx) = unbounded();
-        match start_audio_capture(
-            device,
-            self.state.config.sr,
-            self.state.config.channels,
-            tx,
-        ) {
+        match start_audio_capture(device, self.state.config.sr, self.state.config.channels, tx) {
             Ok(_capture) => {
                 self.state.set_audio_permission_granted();
                 self.state.add_log(
@@ -132,19 +269,88 @@ impl AutosampleApp {
                 );
             }
             Err(err) => {
-                let reason = format!(
+                let msg = format!(
                     "Audio input stream could not start: {}. {}",
                     err,
                     Self::audio_permission_platform_hint()
                 );
-                self.state.set_audio_permission_denied(reason.clone());
-                self.state.add_log(
-                    LogLevel::Warning,
-                    format!("Audio permission check failed: {}", reason),
-                );
+                self.state.set_audio_permission_denied(msg.clone());
+                self.state
+                    .add_log(LogLevel::Warning, format!("Audio permission check failed: {}", msg));
             }
         }
     }
+
+    /// Called every frame on Windows to check if the background WinRT
+    /// permission request has completed.
+    #[cfg(target_os = "windows")]
+    fn poll_windows_permission(&mut self) {
+        use std::sync::mpsc::TryRecvError;
+
+        let done = match &self.win_permission_rx {
+            None => return,
+            Some(rx) => match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(TryRecvError::Empty) => return,   // still waiting
+                Err(TryRecvError::Disconnected) => {
+                    Some(windows_permission::PermissionResult::Error(
+                        "Permission thread disconnected".into(),
+                    ))
+                }
+            },
+        };
+
+        self.win_permission_rx = None;
+
+        match done {
+            None => {}
+            Some(windows_permission::PermissionResult::Granted) => {
+                self.state.add_log(
+                    LogLevel::Info,
+                    "Windows microphone permission granted. Verifying device…".to_string(),
+                );
+                // Now confirm with CPAL that the device actually opens.
+                let audio_in = self.state.config.audio_in.trim().to_string();
+                if !audio_in.is_empty() {
+                    self.probe_cpal_device(&audio_in, "post-WinRT grant check");
+                } else {
+                    self.state.set_audio_permission_granted();
+                }
+            }
+            Some(windows_permission::PermissionResult::Denied) => {
+                let msg = format!(
+                    "Windows denied microphone access. {}",
+                    Self::audio_permission_platform_hint()
+                );
+                self.state.set_audio_permission_denied(msg.clone());
+                self.state.add_log(LogLevel::Warning, msg);
+            }
+            Some(windows_permission::PermissionResult::Error(e)) => {
+                self.state.add_log(
+                    LogLevel::Info,
+                    format!(
+                        "WinRT permission check could not complete ({}). \
+                         Falling back to direct device open…",
+                        e
+                    ),
+                );
+                // Fall back to CPAL probe — better than nothing.
+                let audio_in = self.state.config.audio_in.trim().to_string();
+                if !audio_in.is_empty() {
+                    self.probe_cpal_device(&audio_in, "WinRT fallback");
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn poll_windows_permission(&mut self) {
+        // no-op on non-Windows
+    }
+
+    // -----------------------------------------------------------------------
+    // Input meter
+    // -----------------------------------------------------------------------
 
     fn desired_meter_key(&self) -> Option<(String, u32, u16)> {
         let audio_in = self.state.config.audio_in.trim();
@@ -168,7 +374,7 @@ impl AutosampleApp {
 
     fn start_input_meter(&mut self, audio_in: &str, sr: u32, channels: u16) {
         let device = match find_audio_device(audio_in) {
-            Ok(device) => device,
+            Ok(d) => d,
             Err(err) => {
                 self.state.add_log(
                     LogLevel::Warning,
@@ -202,22 +408,18 @@ impl AutosampleApp {
             self.stop_input_meter();
             return;
         }
-
         if !self.state.audio_permission_is_granted() {
             self.stop_input_meter();
             return;
         }
-
         let desired = self.desired_meter_key();
         if desired.is_none() {
             self.stop_input_meter();
             return;
         }
-
         if self.meter_config_key == desired {
             return;
         }
-
         self.stop_input_meter();
         if let Some((audio_in, sr, channels)) = desired {
             self.start_input_meter(&audio_in, sr, channels);
@@ -238,7 +440,6 @@ impl AutosampleApp {
                 peak = peak.max(s.abs());
             }
         }
-
         if !saw_packet {
             return;
         }
@@ -250,7 +451,9 @@ impl AutosampleApp {
         };
 
         let smoothed = match self.state.input_meter_db {
-            Some(prev) => (prev * (1.0 - METER_SMOOTHING_ALPHA)) + (instant_db * METER_SMOOTHING_ALPHA),
+            Some(prev) => {
+                (prev * (1.0 - METER_SMOOTHING_ALPHA)) + (instant_db * METER_SMOOTHING_ALPHA)
+            }
             None => instant_db,
         };
         self.state.input_meter_db = Some(smoothed);
@@ -261,16 +464,13 @@ impl AutosampleApp {
     // -----------------------------------------------------------------------
 
     pub fn start_session(&mut self) {
-        // --- guards --------------------------------------------------------
         if self.engine_running.load(Ordering::SeqCst) {
             return;
         }
         if self.state.is_device_scan_running() {
             self.state.add_log(
                 LogLevel::Warning,
-                "Start blocked: device refresh is still running. \
-                 Wait until scanning completes."
-                    .to_string(),
+                "Start blocked: device refresh is still running.".to_string(),
             );
             return;
         }
@@ -287,9 +487,7 @@ impl AutosampleApp {
         if self.stop_requested {
             self.state.add_log(
                 LogLevel::Warning,
-                "Start blocked: stop is still in progress. \
-                 Wait until teardown completes."
-                    .to_string(),
+                "Start blocked: stop is still in progress.".to_string(),
             );
             return;
         }
@@ -308,9 +506,8 @@ impl AutosampleApp {
             self.restart_blocked_until = None;
         }
 
-        // Validate note/velocity expressions before touching MIDI backend.
         let notes = match parse_notes(&self.state.config.notes) {
-            Ok(notes) if !notes.is_empty() => notes,
+            Ok(n) if !n.is_empty() => n,
             Ok(_) => {
                 self.state.add_log(
                     LogLevel::Error,
@@ -318,16 +515,16 @@ impl AutosampleApp {
                 );
                 return;
             }
-            Err(error) => {
+            Err(e) => {
                 self.state.add_log(
                     LogLevel::Error,
-                    format!("Start failed: invalid note range/list: {}", error),
+                    format!("Start failed: invalid note range/list: {}", e),
                 );
                 return;
             }
         };
         let velocities = match parse_velocities(&self.state.config.vel) {
-            Ok(velocities) if !velocities.is_empty() => velocities,
+            Ok(v) if !v.is_empty() => v,
             Ok(_) => {
                 self.state.add_log(
                     LogLevel::Error,
@@ -335,24 +532,24 @@ impl AutosampleApp {
                 );
                 return;
             }
-            Err(error) => {
+            Err(e) => {
                 self.state.add_log(
                     LogLevel::Error,
-                    format!("Start failed: invalid velocity layers: {}", error),
+                    format!("Start failed: invalid velocity layers: {}", e),
                 );
                 return;
             }
         };
+
         self.state.add_log(
             LogLevel::Info,
             format!(
-                "Validated session input: {} note(s), {} velocity layer(s).",
+                "Validated: {} note(s), {} velocity layer(s).",
                 notes.len(),
                 velocities.len()
             ),
         );
 
-        // --- MIDI connection -----------------------------------------------
         let midi_target = self.state.config.midi_out.clone();
         self.state.add_log(
             LogLevel::Info,
@@ -362,13 +559,10 @@ impl AutosampleApp {
         let (midi_conn, connected_port_name, available_ports) =
             match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
                 Ok(triple) => triple,
-                Err(error) => {
+                Err(e) => {
                     self.state.add_log(
                         LogLevel::Error,
-                        format!(
-                            "Start failed: MIDI init/connection failed for '{}':\n{:#}",
-                            midi_target, error
-                        ),
+                        format!("Start failed: MIDI connection failed: {:#}", e),
                     );
                     return;
                 }
@@ -379,10 +573,8 @@ impl AutosampleApp {
             format!("MIDI connected: {}", connected_port_name),
         );
 
-        // Release meter stream so the sampling engine can own the device.
         self.stop_input_meter();
 
-        // --- launch engine thread ------------------------------------------
         let (tx, rx) = unbounded();
         self.event_rx = Some(rx);
         self.engine_running.store(true, Ordering::SeqCst);
@@ -390,8 +582,6 @@ impl AutosampleApp {
         let engine_cancel = Arc::new(AtomicBool::new(false));
         self.engine_cancel = Some(engine_cancel.clone());
 
-        // We hand the connection to the engine thread.  It will be returned
-        // (or dropped) when the thread finishes.
         let config = self.state.config.clone();
         let running = self.engine_running.clone();
         let tx_for_errors = tx.clone();
@@ -419,24 +609,16 @@ impl AutosampleApp {
     }
 
     pub fn stop_session(&mut self) {
-        // Signal the engine to cancel; it will send All-Notes-Off itself
-        // before returning, so we do NOT open a second MIDI connection here.
         if let Some(cancel_flag) = &self.engine_cancel {
             cancel_flag.store(true, Ordering::SeqCst);
         }
-
         self.stop_requested = true;
-
-        // Give CoreMIDI time to settle before the user can click Start again.
         self.restart_blocked_until =
             Some(Instant::now() + Duration::from_millis(POST_STOP_SETTLE_MS));
-
         self.state.add_log(
             LogLevel::Info,
             "Stop requested: cancelling active sampling loop.".to_string(),
         );
-
-        // If the engine wasn't running there is nothing to wait for.
         if !self.engine_running.load(Ordering::SeqCst) {
             self.stop_requested = false;
         }
@@ -444,14 +626,9 @@ impl AutosampleApp {
 
     // -----------------------------------------------------------------------
     // Emergency All-Notes-Off
-    //
-    // Only opens a new MIDI connection when we have no other choice (i.e. on
-    // Drop / Quit when the engine is not running).  If the engine is still
-    // live the cancel flag is sufficient — the engine sends note-off itself.
     // -----------------------------------------------------------------------
 
     fn send_all_notes_off_best_effort(&mut self, reason: &str) {
-        // If the engine is still running, cancelling it is enough.
         if self.engine_running.load(Ordering::SeqCst) {
             if let Some(flag) = &self.engine_cancel {
                 flag.store(true, Ordering::SeqCst);
@@ -466,14 +643,9 @@ impl AutosampleApp {
 
         self.state.add_log(
             LogLevel::Info,
-            format!(
-                "Sending All Notes Off for '{}' ({})",
-                midi_target, reason
-            ),
+            format!("Sending All Notes Off for '{}' ({})", midi_target, reason),
         );
 
-        // Re-use active connection when available to avoid a fresh CoreMIDI
-        // client init cycle.
         if let Some(conn) = self.active_midi_conn.as_mut() {
             match autosample_core::midi::send_all_notes_off(conn) {
                 Ok(_) => {
@@ -488,12 +660,10 @@ impl AutosampleApp {
                         LogLevel::Warning,
                         format!("All Notes Off via active connection failed: {}", err),
                     );
-                    // Fall through to open a fresh connection below.
                 }
             }
         }
 
-        // Last resort: open a brand-new connection.
         match autosample_core::midi::connect_midi_output_by_name(&midi_target) {
             Ok((mut conn, port_name, _)) => {
                 if let Err(err) = autosample_core::midi::send_all_notes_off(&mut conn) {
@@ -507,17 +677,12 @@ impl AutosampleApp {
                         format!("All Notes Off sent to '{}'", port_name),
                     );
                 }
-                // Keep the freshly opened connection alive to avoid
-                // immediately stressing the backend on the next operation.
                 self.active_midi_conn = Some(conn);
             }
             Err(err) => {
                 self.state.add_log(
                     LogLevel::Warning,
-                    format!(
-                        "Could not open MIDI output '{}' for All Notes Off: {:#}",
-                        midi_target, err
-                    ),
+                    format!("Could not open MIDI output for All Notes Off: {:#}", err),
                 );
             }
         }
@@ -540,7 +705,9 @@ impl Drop for AutosampleApp {
 
 impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Poll device scan results.
+        // Poll the async Windows permission check result first.
+        self.poll_windows_permission();
+
         self.state.poll_device_scan_result();
 
         if self.state.consume_audio_permission_recheck_requested() {
@@ -559,10 +726,10 @@ impl eframe::App for AutosampleApp {
             self.run_audio_permission_probe("startup check");
             self.startup_audio_permission_probe_done = true;
         }
+
         self.ensure_input_meter();
         self.poll_input_meter();
 
-        // Detect engine thread completion.
         if !self.engine_running.load(Ordering::SeqCst) {
             if self.engine_cancel.is_some() {
                 self.engine_cancel = None;
@@ -576,14 +743,18 @@ impl eframe::App for AutosampleApp {
             }
         }
 
-        // Drain engine event channel.
         if let Some(rx) = &self.event_rx {
             while let Ok(event) = rx.try_recv() {
                 self.state.handle_engine_event(event);
             }
         }
 
-        // Repaint scheduling.
+        // Repaint scheduling — keep ticking while permission check is in flight.
+        #[cfg(target_os = "windows")]
+        if self.win_permission_rx.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+
         if self.state.engine_status == EngineStatus::Running {
             ctx.request_repaint();
         } else if self.state.input_meter_db.is_some() {
@@ -648,11 +819,34 @@ impl eframe::App for AutosampleApp {
                     if let AudioInputPermissionState::Denied(reason) =
                         &self.state.audio_permission_state
                     {
-                        ui.label(reason);
+                        ui.label(
+                            egui::RichText::new(reason)
+                                .color(egui::Color32::RED)
+                                .small(),
+                        );
                     }
 
-                    if ui.button("Check Audio Permission").clicked() {
+                    let checking = matches!(
+                        self.state.audio_permission_state,
+                        AudioInputPermissionState::Checking
+                    );
+
+                    if ui
+                        .add_enabled(
+                            !checking,
+                            egui::Button::new("🎤 Request Microphone Permission"),
+                        )
+                        .clicked()
+                    {
                         self.state.request_audio_permission_recheck();
+                        ui.close_menu();
+                    }
+
+                    #[cfg(target_os = "windows")]
+                    if ui.button("⚙ Open Windows Microphone Settings").clicked() {
+                        let _ = std::process::Command::new("cmd")
+                            .args(["/c", "start", "ms-settings:privacy-microphone"])
+                            .spawn();
                         ui.close_menu();
                     }
 
@@ -684,7 +878,8 @@ impl eframe::App for AutosampleApp {
                     if self.engine_running.load(Ordering::SeqCst) || self.stop_requested {
                         self.state.add_log(
                             LogLevel::Warning,
-                            "Clear Project blocked while run teardown is in progress.".to_string(),
+                            "Clear Project blocked while run teardown is in progress."
+                                .to_string(),
                         );
                     } else {
                         self.state.clear_project();

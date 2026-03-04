@@ -167,8 +167,7 @@ impl AutosampleEngine {
         });
 
         // Setup output directory
-        let output_dir = PathBuf::from(&config.output).join(&config.prefix);
-        fs::create_dir_all(&output_dir)?;
+        let output_dir = prepare_output_dir(&config, &progress_tx)?;
 
         // Generate jobs
         let jobs = generate_jobs(&notes, &velocities, config.round_robin);
@@ -176,6 +175,7 @@ impl AutosampleEngine {
 
         let _ = progress_tx.send(ProgressUpdate::Started {
             total_samples: total_jobs,
+            output_dir: output_dir.to_string_lossy().to_string(),
         });
 
         // Ring buffer setup
@@ -623,4 +623,63 @@ fn midi_note_to_name(note: u8) -> String {
     let octave = (note / 12) as i32 - 1;
     let pitch = note % 12;
     format!("{}{}", names[pitch as usize], octave)
+}
+
+fn prepare_output_dir(config: &RunConfig, progress_tx: &Sender<ProgressUpdate>) -> Result<PathBuf> {
+    let base_output = resolve_base_output(&config.output);
+    let preferred_dir = base_output.join(&config.prefix);
+    match fs::create_dir_all(&preferred_dir) {
+        Ok(_) => Ok(preferred_dir),
+        Err(err) if base_output.is_relative() => {
+            let fallback_base = user_writable_output_root();
+            let fallback_dir = fallback_base.join(&config.prefix);
+            fs::create_dir_all(&fallback_dir).with_context(|| {
+                format!(
+                    "Could not create preferred output dir '{}' or fallback dir '{}'",
+                    preferred_dir.display(),
+                    fallback_dir.display()
+                )
+            })?;
+            let _ = progress_tx.send(ProgressUpdate::Log {
+                level: LogLevel::Warning,
+                message: format!(
+                    "Could not create output path '{}' ({}). Using '{}' instead.",
+                    preferred_dir.display(),
+                    err,
+                    fallback_dir.display()
+                ),
+            });
+            Ok(fallback_dir)
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!(
+                "Could not create output directory '{}'",
+                preferred_dir.display()
+            )
+        }),
+    }
+}
+
+fn resolve_base_output(config_output: &str) -> PathBuf {
+    let trimmed = config_output.trim();
+    if trimmed.is_empty() {
+        PathBuf::from("./output")
+    } else {
+        PathBuf::from(trimmed)
+    }
+}
+
+fn user_writable_output_root() -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            return PathBuf::from(local_app_data).join("autosample").join("output");
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join("autosample-output");
+    }
+
+    std::env::temp_dir().join("autosample-output")
 }

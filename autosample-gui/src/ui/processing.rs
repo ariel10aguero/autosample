@@ -1,10 +1,7 @@
-// src/ui/processing.rs
 use crate::state::AppState;
 use eframe::egui;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    // NOTE: no ScrollArea here (sidebar owns scrolling)
-
     ui.group(|ui| {
         ui.label(egui::RichText::new("Silence Trimming").strong().size(16.0));
         ui.add_space(5.0);
@@ -45,8 +42,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 egui::ComboBox::from_id_salt("norm_mode")
                     .selected_text(&mode)
                     .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut mode, "peak".to_string(), "Peak (0 dBFS)");
-                        ui.selectable_value(&mut mode, "-1dB".to_string(), "-1 dBFS");
+                        ui.selectable_value(
+                            &mut mode,
+                            "peak".to_string(),
+                            "Peak (0 dBFS)",
+                        );
+                        ui.selectable_value(
+                            &mut mode,
+                            "-1dB".to_string(),
+                            "-1 dBFS",
+                        );
                     });
             });
 
@@ -61,6 +66,6 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     ui.group(|ui| {
         ui.label(egui::RichText::new("Fades").strong().size(16.0));
         ui.add_space(5.0);
-        ui.label("5ms fade in/out applied automatically to prevent clicks");
+        ui.label("5 ms fade in/out applied automatically to prevent clicks.");
     });
 }
