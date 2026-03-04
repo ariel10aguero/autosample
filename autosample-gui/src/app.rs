@@ -28,6 +28,7 @@ mod windows_permission {
         Media::Capture::{
             MediaCapture, MediaCaptureInitializationSettings, StreamingCaptureMode,
         },
+        Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED},
     };
 
     #[derive(Debug)]
@@ -37,14 +38,7 @@ mod windows_permission {
         Error(String),
     }
 
-    /// Calls MediaCapture.InitializeAsync() directly inside this process.
-    /// This is the ONLY reliable way to:
-    ///   1. Register the .exe in Settings → Privacy → Microphone
-    ///   2. Trigger the one-time "Allow microphone?" consent dialog
-    ///   3. Receive Granted/Denied without spawning a helper process
     pub fn request_microphone_permission() -> PermissionResult {
-        // Run on a dedicated thread so we can block without freezing egui.
-        // The channel carries the result back.
         let (tx, rx) = std::sync::mpsc::channel();
 
         std::thread::spawn(move || {
@@ -52,24 +46,28 @@ mod windows_permission {
             let _ = tx.send(result);
         });
 
-        // Block up to 30 s for the user to respond to the consent dialog.
         match rx.recv_timeout(std::time::Duration::from_secs(30)) {
             Ok(r) => r,
-            Err(_) => PermissionResult::Error("Timed out waiting for permission response".into()),
+            Err(_) => PermissionResult::Error(
+                "Timed out waiting for permission response".into(),
+            ),
         }
     }
 
     fn try_init_media_capture() -> PermissionResult {
-        // Initialize WinRT for this thread
+        // Initialize WinRT COM for this thread.
         unsafe {
-            use windows::Win32::System::WinRT::RoInitialize;
-            use windows::Win32::System::WinRT::RO_INIT_MULTITHREADED;
             let _ = RoInitialize(RO_INIT_MULTITHREADED);
         }
 
         let capture = match MediaCapture::new() {
             Ok(c) => c,
-            Err(e) => return PermissionResult::Error(format!("MediaCapture::new failed: {}", e)),
+            Err(e) => {
+                return PermissionResult::Error(format!(
+                    "MediaCapture::new failed: {}",
+                    e
+                ))
+            }
         };
 
         let settings = match MediaCaptureInitializationSettings::new() {
@@ -83,23 +81,26 @@ mod windows_permission {
         };
 
         if let Err(e) = settings.SetStreamingCaptureMode(StreamingCaptureMode::Audio) {
-            return PermissionResult::Error(format!("SetStreamingCaptureMode failed: {}", e));
+            return PermissionResult::Error(format!(
+                "SetStreamingCaptureMode failed: {}",
+                e
+            ));
         }
 
         let async_op: IAsyncAction = match capture.InitializeWithSettingsAsync(&settings) {
             Ok(op) => op,
             Err(e) => {
-                // E_ACCESSDENIED (0x80070005) means the user previously denied
-                // or the system policy blocks microphone access.
+                // 0x80070005 = E_ACCESSDENIED — permission was previously denied
                 if e.code().0 as u32 == 0x80070005 {
                     return PermissionResult::Denied;
                 }
-                return PermissionResult::Error(format!("InitializeWithSettingsAsync failed: {}", e));
+                return PermissionResult::Error(format!(
+                    "InitializeWithSettingsAsync failed: {}",
+                    e
+                ));
             }
         };
 
-        // Block this worker thread until the async operation completes.
-        // The OS will show the consent dialog to the user if needed.
         match async_op.get() {
             Ok(_) => PermissionResult::Granted,
             Err(e) => {
@@ -705,6 +706,9 @@ impl Drop for AutosampleApp {
 
 impl eframe::App for AutosampleApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Keep dark visuals pinned even if the OS theme changes at runtime.
+        ctx.set_visuals(egui::Visuals::dark());
+
         // Poll the async Windows permission check result first.
         self.poll_windows_permission();
 
