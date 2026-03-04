@@ -64,8 +64,8 @@ pub struct RunConfigArgs {
     #[arg(long, value_name = "FORMAT", default_value = "wav")]
     pub format: String,
 
-    /// Output directory
-    #[arg(long, value_name = "DIR", required = true)]
+    /// Output directory (defaults to ./output)
+    #[arg(long, value_name = "DIR", default_value = "./output")]
     pub output: String,
 
     /// File prefix/instrument name
